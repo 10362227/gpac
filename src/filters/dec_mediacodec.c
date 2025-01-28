@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / mediacodec decoder filter
@@ -696,10 +696,7 @@ static GF_Err mcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		ctx->mime = "video/hevc";
         GF_HEVCConfig *hvcc;
 	    GF_NALUFFParam *sl;
-	    HEVCState hevc;
 	    u32 j;
-
-	    memset(&hevc, 0, sizeof(HEVCState));
 
 	    hvcc = gf_odf_hevc_cfg_read(dcd->value.data.ptr, dcd->value.data.size, GF_FALSE);
 	    if (!hvcc) return GF_NON_COMPLIANT_BITSTREAM;
@@ -756,6 +753,7 @@ static GF_Err mcdec_rewrite_annex_b(GF_MCDecCtx *ctx, u8 *inBuffer, u32 inBuffer
 	u32 i;
 	u8 *ptr = inBuffer;
 	u32 nal_size;
+	u32 nb_nalsize_zero=0;
 	GF_Err e = GF_OK;
 	GF_BitStream *bs = NULL;
 
@@ -776,6 +774,15 @@ static GF_Err mcdec_rewrite_annex_b(GF_MCDecCtx *ctx, u8 *inBuffer, u32 inBuffer
 		nal_size = 0;
 		for (i = 0; i<ctx->nalu_size_length; i++) {
 			nal_size = (nal_size << 8) + ((u8)ptr[i]);
+		}
+		if (!nal_size) {
+			if (nb_nalsize_zero) {
+				e = GF_NON_COMPLIANT_BITSTREAM;
+				break;
+			}
+			nb_nalsize_zero++;
+		} else {
+			nb_nalsize_zero=0;
 		}
 		ptr += ctx->nalu_size_length;
 
@@ -917,9 +924,9 @@ static GF_Err mcdec_process(GF_Filter *filter)
 		in_buffer = NULL;
 		in_buffer_size = 0;
 	} else {
-		assert(ref_pid);
+		gf_assert(ref_pid);
 		pck = gf_filter_pid_get_packet(ref_pid);
-		assert(pck);
+		gf_assert(pck);
 
 		in_buffer = (u8 *) gf_filter_pck_get_data(pck, &in_buffer_size);
 		cts = gf_filter_pck_get_cts(pck);
@@ -1271,6 +1278,7 @@ GF_FilterRegister GF_MCDecCtxRegister = {
 #endif
 	.configure_pid = mcdec_configure_pid,
 	.process = mcdec_process,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 

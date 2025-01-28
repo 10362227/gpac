@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -72,7 +72,7 @@ GF_Err MergeFragment(GF_MovieFragmentBox *moof, GF_ISOFile *mov)
 		} else if (mov->is_smooth) {
 			trak = gf_list_get(mov->moov->trackList, 0);
 			traf->trex = (GF_TrackExtendsBox*)gf_list_get(mov->moov->mvex->TrackExList, 0);
-			assert(traf->trex);
+			gf_fatal_assert(traf->trex);
 			traf->trex->trackID = trak->Header->trackID = traf->tfhd->trackID;
 		} else {
 			trak = gf_isom_get_track_from_id(mov->moov, traf->tfhd->trackID);
@@ -352,7 +352,6 @@ static void convert_compact_sample_groups(GF_List *child_boxes, GF_List *sampleG
 	}
 }
 
-
 static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, u64 *bytesMissing, Bool progressive_mode)
 {
 	GF_Box *a;
@@ -367,15 +366,19 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 	/*restart from where we stopped last*/
 	top_start = mov->current_top_box_start;
 	if (mov->bytes_removed) {
-		assert(top_start >= mov->bytes_removed);
+		gf_assert(top_start >= mov->bytes_removed);
 		top_start -= mov->bytes_removed;
 	}
 	gf_bs_seek(mov->movieFileMap->bs, top_start);
+
+	if (gf_opts_get_bool("core", "no-mabr-patch")) {
+		gf_bs_set_cookie(mov->movieFileMap->bs, gf_bs_get_cookie(mov->movieFileMap->bs) | GF_ISOM_BS_COOKIE_NO_MABR_PATCH);
+	}
 #endif
 
 
 	/*while we have some data, parse our boxes*/
-	while (gf_bs_available(mov->movieFileMap->bs)) {
+	while (gf_isom_datamap_top_level_box_avail(mov->movieFileMap)) {
 		*bytesMissing = 0;
 #ifndef	GPAC_DISABLE_ISOM_FRAGMENTS
 		mov->current_top_box_start = gf_bs_get_position(mov->movieFileMap->bs) + mov->bytes_removed;
@@ -411,7 +414,7 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 				return GF_ISOM_INVALID_FILE;
 			}
 			mov->moov = (GF_MovieBox *)a;
-			if (mov->moov->has_cmvd) {
+			if (mov->moov->has_cmvd==1) {
 				GF_Box *cmvd = gf_isom_box_find_child(a->child_boxes, GF_QT_BOX_TYPE_CMVD);
 				mov->moov = (GF_MovieBox *) (cmvd ? gf_isom_box_find_child(cmvd->child_boxes, GF_ISOM_BOX_TYPE_MOOV) : NULL);
 				if (!mov->moov) {
@@ -440,9 +443,11 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 			if (e) return e;
 
             if (!mov->moov->mvhd) {
-                GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[iso file] Missing MovieHeaderBox\n"));
-                return GF_ISOM_INVALID_FILE;
-            }
+				if (mov->moov->has_cmvd!=2) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[iso file] Missing MovieHeaderBox\n"));
+					return GF_ISOM_INVALID_FILE;
+				}
+			}
 
             if (mov->meta) {
 				gf_isom_meta_restore_items_ref(mov, mov->meta);
@@ -463,6 +468,7 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 				u32 k;
 				for (k=0; k<gf_list_count(mov->moov->trackList); k++) {
 					GF_TrackBox *trak = (GF_TrackBox *)gf_list_get(mov->moov->trackList, k);
+					if (trak->extl) continue;
 					if (trak->Media->information->sampleTable->sampleGroups) {
 						convert_compact_sample_groups(trak->Media->information->sampleTable->child_boxes, trak->Media->information->sampleTable->sampleGroups);
 					}
@@ -526,6 +532,11 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
                         mdat_end=0;
                     }
 				}
+			}
+			//keep all imda boxes for later rewrite
+			else if (((GF_MediaDataBox *)a)->is_imda) {
+				e = gf_list_add(mov->TopBoxes, a);
+				if (e) return e;
 			}
 			/*if we don't have any MDAT yet, create one (edit-write mode)
 			We only work with one mdat, but we're puting it at the place
@@ -826,6 +837,8 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 		mov->current_top_box_start = gf_bs_get_position(mov->movieFileMap->bs) + mov->bytes_removed;
 #endif
 	}
+	if (!mov->first_data_toplevel_offset)
+		mov->first_data_toplevel_offset = mov->current_top_box_start;
 
 	/*we need at least moov or meta*/
 	if (!mov->moov && !mov->meta
@@ -837,7 +850,7 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 	}
 	/*we MUST have movie header*/
 	if (!gf_opts_get_bool("core", "no-check")) {
-		if (mov->moov && !mov->moov->mvhd) {
+		if (mov->moov && !mov->moov->mvhd && (mov->moov->has_cmvd!=2)) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[iso file] Missing MVHD in MOOV!\n"));
 			return GF_ISOM_INVALID_FILE;
 		}
@@ -853,7 +866,7 @@ static GF_Err gf_isom_parse_movie_boxes_internal(GF_ISOFile *mov, u32 *boxType, 
 
 	if (mov->moov) {
 		/*set the default interleaving time*/
-		mov->interleavingTime = mov->moov->mvhd->timeScale;
+		mov->interleavingTime = mov->moov->mvhd ? mov->moov->mvhd->timeScale : 0;
 
 #ifndef	GPAC_DISABLE_ISOM_FRAGMENTS
 		/*in edit mode with successfully loaded fragments, delete all fragment signaling since
@@ -943,7 +956,11 @@ GF_ISOFile *gf_isom_open_file(const char *fileName, GF_ISOOpenMode OpenMode, con
 		mov->store_traf_map = GF_TRUE;
 #endif
 
-	if ( (OpenMode == GF_ISOM_OPEN_READ) || (OpenMode == GF_ISOM_OPEN_READ_DUMP) || (OpenMode == GF_ISOM_OPEN_READ_EDIT) ) {
+	if ( (OpenMode == GF_ISOM_OPEN_READ)
+		|| (OpenMode == GF_ISOM_OPEN_READ_DUMP)
+		|| (OpenMode == GF_ISOM_OPEN_READ_DUMP_NO_COMP)
+		|| (OpenMode == GF_ISOM_OPEN_READ_EDIT)
+	) {
 		if (OpenMode == GF_ISOM_OPEN_READ_EDIT) {
 			mov->openMode = GF_ISOM_OPEN_READ_EDIT;
 
@@ -973,6 +990,10 @@ GF_ISOFile *gf_isom_open_file(const char *fileName, GF_ISOOpenMode OpenMode, con
 			gf_isom_set_last_error(NULL, e);
 			gf_isom_delete_movie(mov);
 			return NULL;
+		}
+		if (OpenMode == GF_ISOM_OPEN_READ_DUMP_NO_COMP) {
+			OpenMode = GF_ISOM_OPEN_READ_DUMP;
+			gf_bs_set_cookie(mov->movieFileMap->bs, GF_ISOM_BS_COOKIE_NO_DECOMP);
 		}
 
 		if (OpenMode == GF_ISOM_OPEN_READ_DUMP) {
@@ -1042,10 +1063,11 @@ GF_ISOFile *gf_isom_open_file(const char *fileName, GF_ISOOpenMode OpenMode, con
 	return mov;
 }
 
+GF_EXPORT
 GF_Err gf_isom_set_write_callback(GF_ISOFile *mov,
-			GF_Err (*on_block_out)(void *cbk, u8 *data, u32 block_size, void *cbk_data, u32 cbk_magic),
-			GF_Err (*on_block_patch)(void *usr_data, u8 *block, u32 block_size, u64 block_offset, Bool is_insert),
-			void (*on_last_block_start)(void *usr_data),
+			gf_isom_on_block_out on_block_out,
+			gf_isom_on_block_patch on_block_patch,
+			gf_isom_on_last_block_start on_last_block_start,
  			void *usr_data,
  			u32 block_size)
 {
@@ -1053,6 +1075,7 @@ GF_Err gf_isom_set_write_callback(GF_ISOFile *mov,
 	if (mov->finalName && !strcmp(mov->finalName, "_gpac_isobmff_redirect")) {}
 	else if (mov->fileName && !strcmp(mov->fileName, "_gpac_isobmff_redirect")) {}
 	else return GF_BAD_PARAM;
+	if (!on_block_out) return GF_BAD_PARAM;
 	mov->on_block_out = on_block_out;
 	mov->on_block_patch = on_block_patch;
 	mov->on_last_block_start = on_last_block_start;
@@ -1078,6 +1101,23 @@ u64 gf_isom_get_mp4time()
 void gf_isom_delete_movie(GF_ISOFile *mov)
 {
 	if (!mov) return;
+
+	// track datahandlers might point to the movieFileMap that we are about to delete
+	// remove the association to avoid double frees
+	if (mov->moov && mov->moov->trackList) {
+		u32 i;
+		for (i=0; i<gf_list_count(mov->moov->trackList); i++) {
+			GF_TrackBox *trak = (GF_TrackBox*)gf_list_get(mov->moov->trackList, i);
+
+			if (trak && trak->Media && trak->Media->information) {
+				if (trak->Media->information->dataHandler == mov->movieFileMap)
+					trak->Media->information->dataHandler = NULL;
+
+				if (trak->Media->information->scalableDataHandler == mov->movieFileMap)
+					trak->Media->information->scalableDataHandler = NULL;
+			}
+		}
+	}
 
 	//these are our two main files
 	if (mov->movieFileMap) gf_isom_datamap_del(mov->movieFileMap);
@@ -1410,7 +1450,7 @@ GF_ISOFile *gf_isom_create_movie(const char *fileName, GF_ISOOpenMode OpenMode, 
 	GF_Err e;
 
 	GF_ISOFile *mov = gf_isom_new_movie();
-	if (!mov) return NULL;
+	if (!mov || !fileName) return NULL;
 	mov->openMode = OpenMode;
 	//then set up our movie
 
@@ -1422,7 +1462,7 @@ GF_ISOFile *gf_isom_create_movie(const char *fileName, GF_ISOOpenMode OpenMode, 
 		const char *ext;
 		//THIS IS NOT A TEMP FILE, WRITE mode is used for "live capture"
 		//this file will be the final file...
-		mov->fileName = fileName ? gf_strdup(fileName) : NULL;
+		mov->fileName = gf_strdup(fileName);
 		e = gf_isom_datamap_new(fileName, NULL, GF_ISOM_DATA_MAP_WRITE, &mov->editFileMap);
 		if (e) goto err_exit;
 
@@ -1435,7 +1475,7 @@ GF_ISOFile *gf_isom_create_movie(const char *fileName, GF_ISOOpenMode OpenMode, 
 		}
 	} else {
 		//we are in EDIT mode but we are creating the file -> temp file
-		mov->finalName = fileName ? gf_strdup(fileName) : NULL;
+		mov->finalName = gf_strdup(fileName);
 		e = gf_isom_datamap_new("_gpac_isobmff_tmp_edit", tmp_dir, GF_ISOM_DATA_MAP_WRITE, &mov->editFileMap);
 		if (e) {
 			gf_isom_set_last_error(NULL, e);

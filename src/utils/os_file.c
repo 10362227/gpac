@@ -520,8 +520,8 @@ static Bool gf_unregister_file_handle(FILE *ptr)
 {
 	u32 i, count;
 	Bool res = GF_FALSE;
-	assert(gpac_file_handles);
-	gpac_file_handles--;
+	if (gpac_file_handles)
+		gpac_file_handles--;
 
 	if (!gpac_open_files)
 		return GF_FALSE;
@@ -683,7 +683,7 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	struct stat st;
 #endif
 
-	if (!dir || !enum_dir_fct) return GF_BAD_PARAM;
+	if (!dir || !strlen(dir) || !enum_dir_fct) return GF_BAD_PARAM;
 
 	if (filter && (!strcmp(filter, "*") || !filter[0])) filter=NULL;
 
@@ -768,8 +768,16 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	}
 
 #else
-	strcpy(path, dir);
-	if (path[strlen(path)-1] != '/') strcat(path, "/");
+	size_t dir_len = strlen(dir);
+	if (dir_len < GF_ARRAY_LENGTH(path)) {
+		strcpy(path, dir);
+	}
+	else {
+		memcpy(path, dir, GF_ARRAY_LENGTH(path));
+		path[ GF_ARRAY_LENGTH(path) - 1] = 0;
+	}
+	size_t path_len = strlen(path);
+	if (path_len && path[path_len-1] != '/') strcat(path, "/");
 #endif
 
 #ifdef WIN32
@@ -777,9 +785,10 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	if (SearchH == INVALID_HANDLE_VALUE) return GF_IO_ERR;
 
 #if defined (_WIN32_WCE)
-	_path[strlen(_path)-1] = 0;
+	_path[strlen(_path) ? strlen(_path)-1:0] = 0;
 #else
-	path[wcslen(path)-1] = 0;
+	size_t path_len = wcslen(path);
+	path[ path_len ? path_len-1 : 0] = 0;
 #endif
 
 	while (SearchH != INVALID_HANDLE_VALUE) {
@@ -1524,7 +1533,7 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("FileIO %s is not read-enabled and open mode %s was requested\n", file_name, mode));
 			return NULL;
 		}
-		if ((strchr(mode, 'w') || strchr(mode, 'a'))  && !gf_fileio_write_mode(gfio_ref)) {
+		if (strpbrk(mode, "wa") && !gf_fileio_write_mode(gfio_ref)) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("FileIO %s is not write-enabled and open mode %s was requested\n", file_name, mode));
 			return NULL;
 		}
@@ -1605,7 +1614,7 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CORE, ("[Core] file \"%s\" opened in mode \"%s\" - %d file handles\n", file_name, mode, gpac_file_handles));
 	} else if (!no_warn) {
-		if (strchr(mode, 'w') || strchr(mode, 'a')) {
+		if (strpbrk(mode, "wa")) {
 #if defined(WIN32)
 			u32 err = GetLastError();
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] system failure for file opening of \"%s\" in mode \"%s\": 0x%08x\n", file_name, mode, err));
@@ -1615,6 +1624,28 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 		}
 	}
 	return res;
+}
+
+
+GF_EXPORT
+s32 gf_fd_open(const char *file_name, u32 oflags, u32 uflags)
+{
+	if (!file_name) return -1;
+
+#if defined(WIN32)
+	wchar_t *wname = gf_utf8_to_wcs(file_name);
+	if (!wname) return -1;
+	int res = _wopen(wname, oflags, uflags);
+	gf_free(wname);
+	return res;
+#elif defined(GPAC_CONFIG_LINUX) && !defined(GPAC_CONFIG_ANDROID)
+	return open(file_name, oflags, uflags);
+#elif (defined(GPAC_CONFIG_FREEBSD) || defined(GPAC_CONFIG_DARWIN))
+	return open(file_name, oflags, uflags);
+#else
+	return open(file_name, oflags, uflags);
+#endif
+	return -1;
 }
 
 GF_EXPORT
@@ -1797,6 +1828,8 @@ int gf_fflush(FILE *stream)
 GF_EXPORT
 int gf_feof(FILE *stream)
 {
+	if (!stream) return 1;
+
 	if (gf_fileio_check(stream)) {
 		return gf_fileio_eof((GF_FileIO *)stream) ? 1 : 0;
 	}
@@ -1831,6 +1864,31 @@ u64 gf_fsize(FILE *fp)
 	gf_fseek(fp, 0, SEEK_SET);
 	return size;
 }
+
+
+GF_EXPORT
+u64 gf_fd_fsize(int fd)
+{
+	u64 size=0;
+#ifdef GPAC_HAS_FD
+
+	if (fd >= 0) {
+
+#if defined(WIN32)
+		struct _stat64  sb;
+		_fstat64(fd, &sb);
+#else
+		struct stat sb;
+		fstat(fd, &sb);
+#endif
+		size = (u64) sb.st_size;
+	}
+
+#endif
+	return size;
+}
+
+
 
 /**
   * Returns a pointer to the start of a filepath basename
@@ -1875,11 +1933,18 @@ char* gf_file_ext_start(const char* filename)
 
 	if (basename) {
 		char *ext = strrchr(basename, '.');
-		if (ext && !strcmp(ext, ".gz")) {
+		if (!ext) return NULL;
+		if (!strcmp(ext, ".gz")) {
 			ext[0] = 0;
 			char *ext2 = strrchr(basename, '.');
 			ext[0] = '.';
 			if (ext2) return ext2;
+		}
+		//consider that if we have a space after a dot and before any common separator, we have no file extension
+		u32 i;
+		for (i=1; ext[i] ; i++) {
+			if ((ext[i]==':') || (ext[i]=='@') || (ext[i]=='#') || (ext[i]=='?')) break;
+			if (ext[i]==' ') return NULL;
 		}
 		return ext;
 	}
