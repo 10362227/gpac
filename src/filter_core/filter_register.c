@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2023
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / filters sub-project
@@ -147,6 +147,7 @@ REG_DEC(hevcmerge)
 
 REG_DEC(jsf)
 REG_DEC(tssplit)
+REG_DEC(tsgendts)
 REG_DEC(httpout)
 REG_DEC(uncvdec)
 
@@ -158,12 +159,11 @@ REG_DEC(dtout)
 REG_DEC(mcdec)
 #endif
 
-#if defined(GPAC_CONFIG_EMSCRIPTEN)
+#if !defined(GPAC_CONFIG_IOS) && !defined(GPAC_CONFIG_ANDROID)
 REG_DEC(wcdec)
 REG_DEC(wcenc)
 REG_DEC(webgrab)
 #endif
-
 
 REG_DEC(rfflac)
 REG_DEC(rfprores)
@@ -188,9 +188,11 @@ REG_DEC(ttml2vtt)
 REG_DEC(ttml2srt)
 REG_DEC(unframer)
 REG_DEC(writeuf)
+REG_DEC(ttmlmerge)
 REG_DEC(ghidmx)
 REG_DEC(evgs)
 REG_DEC(ccdec)
+REG_DEC(scte35dec)
 REG_DEC(mpeghdec)
 
 typedef const GF_FilterRegister *(*filter_reg_fun)(GF_FilterSession *session);
@@ -313,6 +315,7 @@ BuiltinReg BuiltinFilters [] = {
 	REG_IT(rfmhas),
 	REG_IT(rfprores),
 	REG_IT(tssplit),
+	REG_IT(tsgendts),
 	REG_IT(bsrw),
 	REG_IT(bssplit),
 	REG_IT(bsagg),
@@ -335,7 +338,6 @@ BuiltinReg BuiltinFilters [] = {
 	REG_IT(ffmx),
 	REG_IT(ffavf),
 	REG_IT(ffbsf),
-	REG_IT(ffbsf),
 
 	REG_IT(jsf),
 	REG_IT(routeout),
@@ -346,12 +348,14 @@ BuiltinReg BuiltinFilters [] = {
 	REG_IT(oggmx),
 	REG_IT(unframer),
 	REG_IT(writeuf),
+	REG_IT(ttmlmerge),
 	REG_IT(uncvdec),
 	REG_IT(ghidmx),
 	REG_IT(evgs),
 	REG_IT(ccdec),
+	REG_IT(scte35dec),
 
-#if defined(GPAC_CONFIG_EMSCRIPTEN)
+#if !defined(GPAC_CONFIG_IOS) && !defined(GPAC_CONFIG_ANDROID)
 	REG_IT(wcdec),
 	REG_IT(wcenc),
 	REG_IT(webgrab),
@@ -398,7 +402,7 @@ void gf_fs_reg_all(GF_FilterSession *fsess, GF_FilterSession *a_sess)
 
 		const GF_FilterRegister *freg = BuiltinFilters[i].fun(a_sess);
 		if (!freg) continue;
-		assert( !strcmp(freg->name, BuiltinFilters[i].name));
+		gf_assert( !strcmp(freg->name, BuiltinFilters[i].name));
 		gf_fs_add_filter_register(fsess, freg);
 
 	}

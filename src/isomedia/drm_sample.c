@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *          Authors: Cyril Concolato / Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2023
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -752,7 +752,7 @@ GF_Err gf_isom_get_cenc_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDe
 #ifndef GPAC_DISABLE_ISOM_WRITE
 
 GF_Err gf_isom_set_cenc_protection(GF_ISOFile *the_file, u32 trackNumber, u32 desc_index, u32 scheme_type,
-                                   u32 scheme_version, u32 default_IsEncrypted, u8 default_crypt_byte_block, u8 default_skip_byte_block,
+                                   u32 scheme_version, u32 default_IsEncrypted, u32 default_crypt_byte_block, u32 default_skip_byte_block,
 								    u8 *key_info, u32 key_info_size)
 {
 	GF_Err e;
@@ -1211,7 +1211,7 @@ GF_Err gf_isom_cenc_merge_saiz_saio(GF_SampleEncryptionBox *senc, GF_SampleTable
 {
 	u32 i;
 	Bool is_first_saiz = GF_FALSE;
-	assert(stbl);
+	gf_assert(stbl);
 
 	if (!senc->cenc_saiz) {
 		senc->cenc_saiz = (GF_SampleAuxiliaryInfoSizeBox *) gf_isom_box_new_parent(&stbl->child_boxes, GF_ISOM_BOX_TYPE_SAIZ);
@@ -1559,7 +1559,7 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 		}
 		if ((nb_saio==1) && !saio_cenc->total_size) {
 			for (j = 0; j < saiz->sample_count; j++) {
-				saio_cenc->total_size += saiz->default_sample_info_size ? saiz->default_sample_info_size : saiz->sample_info_size[j];
+				saio_cenc->total_size += (saiz->default_sample_info_size || !saiz->sample_info_size) ? saiz->default_sample_info_size : saiz->sample_info_size[j];
 			}
 		}
 		if (saiz->cached_sample_num+1== sampleNumber) {
@@ -1569,7 +1569,7 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 				return GF_ISOM_INVALID_FILE;
 
 			for (j = 0; j < sampleNumber-1; j++)
-				prev_sai_size += saiz->default_sample_info_size ? saiz->default_sample_info_size : saiz->sample_info_size[j];
+				prev_sai_size += (saiz->default_sample_info_size || !saiz->sample_info_size) ? saiz->default_sample_info_size : saiz->sample_info_size[j];
 		}
 		if (saiz->default_sample_info_size) {
 			size = saiz->default_sample_info_size;
@@ -1622,7 +1622,8 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 			(*out_buffer) = gf_realloc((*out_buffer), sizeof(char)*(size) );
 			if (! *out_buffer) return GF_OUT_OF_MEM;
 		}
-		gf_bs_read_data(mdia->information->dataHandler->bs, (*out_buffer), size);
+		if ((*out_buffer) && size)
+			gf_bs_read_data(mdia->information->dataHandler->bs, (*out_buffer), size);
 	}
 	(*out_size) = size;
 
@@ -1724,7 +1725,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 	return GF_OK;
 }
 
-void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
+void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
 {
 	GF_ProtectionSchemeInfoBox *sinf;
 
@@ -1821,7 +1822,7 @@ void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescrip
 }
 
 GF_EXPORT
-GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
+GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
 {
 	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;

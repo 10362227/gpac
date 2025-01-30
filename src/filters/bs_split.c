@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022-2023
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / compressed bitstream splitter filter
@@ -179,8 +179,8 @@ rebrowse_sps:
 			GF_NALUFFParam *sl = gf_list_get(pctx->svcc->sequenceParameterSets, i);
 			if (sl->id == avc_sps_id) {
 				sps_found = GF_TRUE;
-				assert(gf_list_find(c_opid->svcc->sequenceParameterSets, sl)<0);
-				bs_split_svc_add_param(c_opid->svcc->sequenceParameterSets, sl);
+				if (gf_list_find(c_opid->svcc->sequenceParameterSets, sl)<0)
+					bs_split_svc_add_param(c_opid->svcc->sequenceParameterSets, sl);
 				break;
 			}
 		}
@@ -194,7 +194,8 @@ rebrowse_sps:
 			GF_NALUFFParam *sl = gf_list_get(pctx->svcc->pictureParameterSets, i);
 			if (sl->id == avc_pps_id) {
 				pps_found = GF_TRUE;
-				bs_split_svc_add_param(c_opid->svcc->pictureParameterSets, sl);
+				if (gf_list_find(c_opid->svcc->pictureParameterSets, sl)<0)
+					bs_split_svc_add_param(c_opid->svcc->pictureParameterSets, sl);
 				break;
 			}
 		}
@@ -1322,7 +1323,7 @@ static GF_Err bs_split_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	}
 
 	prop = gf_filter_pid_get_property(pid, GF_PROP_PID_CODECID);
-	assert(prop);
+	gf_fatal_assert(prop);
 
 	switch (prop->value.uint) {
 	case GF_CODECID_AVC:
@@ -1433,7 +1434,7 @@ static const GF_FilterCapability BSSplitCaps[] =
 
 GF_FilterRegister BSSplitRegister = {
 	.name = "bssplit",
-	GF_FS_SET_DESCRIPTION("Compressed layered bitstream splitter")
+	GF_FS_SET_DESCRIPTION("Layered bitstream splitter")
 	GF_FS_SET_HELP("This filter splits input stream by layers and sublayers\n"
 	"\n"
 	"The filter supports AVC|H264, HEVC and VVC stream splitting and is pass-through for other codec types.\n"
@@ -1476,7 +1477,8 @@ GF_FilterRegister BSSplitRegister = {
 	.initialize = bs_split_initialize,
 	.finalize = bs_split_finalize,
 	.configure_pid = bs_split_configure_pid,
-	.process = bs_split_process
+	.process = bs_split_process,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 #endif

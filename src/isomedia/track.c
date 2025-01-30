@@ -211,7 +211,7 @@ default_sync:
 				esd->decoderConfig->rvc_config = (GF_DefaultDescriptor *) gf_odf_desc_new(GF_ODF_DSI_TAG);
 				if (mime_type && !strcmp(mime_type, "application/rvc-config+xml+gz") ) {
 #if !defined(GPAC_DISABLE_ZLIB)
-					gf_gz_decompress_payload(rvc_cfg_data, rvc_cfg_size, &esd->decoderConfig->rvc_config->data, &esd->decoderConfig->rvc_config->dataLength);
+					gf_gz_decompress_payload_ex(rvc_cfg_data, rvc_cfg_size, &esd->decoderConfig->rvc_config->data, &esd->decoderConfig->rvc_config->dataLength, GF_TRUE);
 					gf_free(rvc_cfg_data);
 #endif
 				} else {
@@ -375,19 +375,21 @@ Bool Track_IsMPEG4Stream(u32 HandlerType)
 }
 
 
-GF_Err SetTrackDuration(GF_TrackBox *trak)
+GF_Err SetTrackDurationEx(GF_TrackBox *trak, Bool keep_utc)
 {
-	u64 trackDuration;
+	u64 trackDuration=0xFFFFFFFF;
 	u32 i;
-	GF_Err e;
+	GF_Err e = GF_OK;
 
 	//the total duration is the media duration: adjust it in case...
-	e = Media_SetDuration(trak);
-	if (e) return e;
+	if (!trak->extl) {
+		e = Media_SetDuration(trak);
+		if (e) return e;
 
-	//assert the timeScales are non-NULL
-	if (!trak->moov->mvhd || !trak->moov->mvhd->timeScale || !trak->Media->mediaHeader->timeScale) return GF_ISOM_INVALID_FILE;
-	trackDuration = (trak->Media->mediaHeader->duration * trak->moov->mvhd->timeScale) / trak->Media->mediaHeader->timeScale;
+		//assert the timeScales are non-NULL
+		if (!trak->moov->mvhd || !trak->moov->mvhd->timeScale || !trak->Media->mediaHeader->timeScale) return GF_ISOM_INVALID_FILE;
+		trackDuration = (trak->Media->mediaHeader->duration * trak->moov->mvhd->timeScale) / trak->Media->mediaHeader->timeScale;
+	}
 
 	//if we have an edit list, the duration is the sum of all the editList
 	//entries' duration (always expressed in MovieTimeScale)
@@ -400,16 +402,21 @@ GF_Err SetTrackDuration(GF_TrackBox *trak)
 			trackDuration += ent->segmentDuration;
 		}
 	}
-	if (!trackDuration) {
+	if (!trackDuration && trak->Media) {
 		trackDuration = (trak->Media->mediaHeader->duration * trak->moov->mvhd->timeScale) / trak->Media->mediaHeader->timeScale;
 	}
-	if (!trak->Header) {
+	if (!trak->Header || (trak->extl && (trackDuration==0xFFFFFFFF))) {
 		return GF_OK;
 	}
 	trak->Header->duration = trackDuration;
-	if (!trak->moov->mov->keep_utc && !gf_sys_is_test_mode() )
+	if (!keep_utc && !trak->moov->mov->keep_utc && !gf_sys_is_test_mode() )
 		trak->Header->modificationTime = gf_isom_get_mp4time();
 	return GF_OK;
+}
+
+GF_Err SetTrackDuration(GF_TrackBox *trak)
+{
+	return SetTrackDurationEx(trak, GF_FALSE);
 }
 
 
@@ -582,6 +589,16 @@ GF_Err MergeTrack(GF_TrackBox *trak, GF_TrackFragmentBox *traf, GF_MovieFragment
 		gf_list_del_item(traf->child_boxes, traf->tfrf);
 		gf_list_add(trak->child_boxes, trak->tfrf);
 	}
+	if (traf->SampleRefs) {
+		if (!trak->Media->information->sampleTable->SampleRefs) {
+			trak->Media->information->sampleTable->SampleRefs = traf->SampleRefs;
+			gf_list_add(trak->Media->information->sampleTable->child_boxes, traf->SampleRefs);
+			gf_list_del_item(traf->child_boxes, traf->SampleRefs);
+			traf->SampleRefs = NULL;
+		} else {
+			gf_list_transfer(trak->Media->information->sampleTable->SampleRefs->entries, traf->SampleRefs->entries);
+		}
+	}
 
 	if (trak->moov->mov->signal_frag_bounds) {
 		store_traf_map = GF_TRUE;
@@ -608,6 +625,10 @@ GF_Err MergeTrack(GF_TrackBox *trak, GF_TrackFragmentBox *traf, GF_MovieFragment
 					if (traf_clone->sdtp) {
 						gf_isom_box_del_parent(&traf_clone->child_boxes, (GF_Box *) traf_clone->sdtp);
 						traf_clone->sdtp = NULL;
+					}
+					if (traf_clone->SampleRefs) {
+						gf_isom_box_del_parent(&traf_clone->child_boxes, (GF_Box *) traf_clone->SampleRefs);
+						traf_clone->SampleRefs = NULL;
 					}
 				}
 				gf_isom_box_size((GF_Box *)moof_clone);
@@ -655,6 +676,13 @@ GF_Err MergeTrack(GF_TrackBox *trak, GF_TrackFragmentBox *traf, GF_MovieFragment
 #endif
 	i=0;
 	while ((trun = (GF_TrackFragmentRunBox *)gf_list_enum(traf->TrackRuns, &i))) {
+		if (! (trun->flags & (GF_ISOM_TRUN_DURATION | GF_ISOM_TRUN_SIZE | GF_ISOM_TRUN_FLAGS | GF_ISOM_TRUN_CTS_OFFSET) ) ) {
+			if (!def_size || (trun->sample_count>0x10000)) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[iso file] Invalid track run for track %d - default size %d num samples %d\n", traf->trex->trackID, def_size, trun->sample_count));
+				return GF_ISOM_INVALID_FILE;
+			}
+		}
+
 		//merge the run
 		for (j=0; j<trun->sample_count; j++) {
 			GF_Err e;

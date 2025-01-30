@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom Paris 2022-2023
+ *			Copyright (c) Telecom Paris 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / restamper filter
@@ -54,18 +54,17 @@ typedef struct
 	GF_List *packets;
 } RestampPid;
 
-enum
-{
+GF_OPT_ENUM (GF_VideoFrameCopyMode,
 	RESTAMP_RAWV_NO=0,
 	RESTAMP_RAWV_FORCE,
 	RESTAMP_RAWV_DYN,
-};
+);
 
 typedef struct
 {
 	GF_Fraction fps, delay, delay_v, delay_a, delay_t, delay_o;
 	GF_Fraction64 tsinit;
-	u32 rawv;
+	GF_VideoFrameCopyMode rawv;
 	u32 align;
 	Bool reorder;
 
@@ -123,7 +122,7 @@ static GF_Err restamp_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 	pctx->is_video = GF_FALSE;
 	GF_Fraction *delay = NULL;
 	prop = gf_filter_pid_get_property(pid, GF_PROP_PID_STREAM_TYPE);
-	assert(prop);
+	gf_fatal_assert(prop);
 	switch (prop->value.uint) {
 	case GF_STREAM_VISUAL:
 		pctx->is_video = GF_TRUE;
@@ -137,7 +136,7 @@ static GF_Err restamp_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 				if (prop && !prop->value.boolean) {
 					pctx->raw_vid_copy = GF_TRUE;
 				} else {
-					gf_filter_pid_negociate_property(pid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW) );
+					gf_filter_pid_negotiate_property(pid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW) );
 					return GF_OK;
 				}
 			}
@@ -522,7 +521,7 @@ static GF_Err restamp_process(GF_Filter *filter)
 					gf_filter_pck_ref(&pctx->pck_ref);
 					discard = GF_TRUE;
 				}
-				assert(pctx->pck_ref);
+				gf_assert(pctx->pck_ref);
 				opck = gf_filter_pck_new_ref(pctx->opid, 0, 0, pctx->pck_ref);
 				if (!opck) return GF_OUT_OF_MEM;
 				gf_filter_pck_merge_properties(pck, opck);
@@ -637,7 +636,7 @@ static const GF_FilterCapability RestampCaps[] =
 
 const GF_FilterRegister RestampRegister = {
 	.name = "restamp",
-	GF_FS_SET_DESCRIPTION("Packet timestamp rewriter")
+	GF_FS_SET_DESCRIPTION("Timestamp rewriter")
 	GF_FS_SET_HELP("This filter rewrites timing (offsets and rate) of packets.\n"
 	"\n"
 	"The delays (global or per stream class) can be either positive (stream presented later) or negative (stream presented sooner).\n"
@@ -647,9 +646,9 @@ const GF_FilterRegister RestampRegister = {
 	"- otherwise if negative, stream rate is multiplied by `-fps.num/fps.den`.\n"
 	"- otherwise if positive and the stream is not video, stream rate is not modified.\n"
 	"- otherwise (video PID), constant frame rate is assumed and:\n"
-	"  - if [-rawv=no](), video frame rate is changed to the specified rate (speed-up or slow-down).\n"
-	"  - if [-rawv=force](), input video stream is decoded and video frames are dropped/copied to match the new rate.\n"
-	"  - if [-rawv=dyn](), input video stream is decoded if not all-intra and video frames are dropped/copied to match the new rate.\n"
+	"  - if [-rawv]() = `no`, video frame rate is changed to the specified rate (speed-up or slow-down).\n"
+	"  - if [-rawv]() = `force`, input video stream is decoded and video frames are dropped/copied to match the new rate.\n"
+	"  - if [-rawv]() = `dyn`, input video stream is decoded if not all-intra and video frames are dropped/copied to match the new rate.\n"
 	"\n"
 	"Note: frames are simply copied or dropped with no motion compensation.\n"
 	"\n"
@@ -665,7 +664,8 @@ const GF_FilterRegister RestampRegister = {
 	.finalize = restamp_finalize,
 	.configure_pid = restamp_configure_pid,
 	.process = restamp_process,
-	.update_arg = restamp_update_arg
+	.update_arg = restamp_update_arg,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 const GF_FilterRegister *restamp_register(GF_FilterSession *session)
