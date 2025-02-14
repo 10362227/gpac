@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -107,6 +107,7 @@ typedef struct
 
 	u32 def_w, def_h;
 
+	unsigned short line_cache[BT_LINE_SIZE];
 } GF_BTParser;
 
 GF_Err gf_bt_parse_bifs_command(GF_BTParser *parser, char *name, GF_List *cmdList);
@@ -173,7 +174,7 @@ next_line:
 		if (parser->unicode_type) {
 			u8 c1, c2;
 			unsigned short wchar;
-			unsigned short l[BT_LINE_SIZE];
+			unsigned short *l = parser->line_cache;
 			unsigned short *dst = l;
 			Bool is_ret = 0;
 			u32 last_space_pos, last_space_pos_stream;
@@ -2815,7 +2816,7 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 		switch (type) {
 		/*single descriptor*/
 		case GF_ODF_FT_OD:
-			assert(desc->tag==GF_IPMPX_CONNECT_TOOL_TAG);
+			gf_assert(desc->tag==GF_IPMPX_CONNECT_TOOL_TAG);
 			str = gf_bt_get_next(parser, 0);
 			oddesc = gf_bt_parse_descriptor(parser, str);
 			if (!oddesc) {
@@ -2823,12 +2824,12 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 				gf_ipmpx_data_del(desc);
 				return NULL;
 			}
-			assert(oddesc->tag==GF_ODF_IPMP_TAG);
+			gf_assert(oddesc->tag==GF_ODF_IPMP_TAG);
 			((GF_IPMPX_ConnectTool *)desc)->toolDescriptor = (GF_IPMP_Descriptor *)oddesc;
 			break;
 		/*descriptor list*/
 		case GF_ODF_FT_OD_LIST:
-			assert(desc->tag==GF_IPMPX_GET_TOOLS_RESPONSE_TAG);
+			gf_assert(desc->tag==GF_IPMPX_GET_TOOLS_RESPONSE_TAG);
 			if (gf_bt_check_code(parser, '[')) {
 				while (!gf_bt_check_code(parser, ']')) {
 					GF_Descriptor *ipmp_t = gf_bt_parse_descriptor(parser, NULL);
@@ -2837,7 +2838,7 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 						parser->last_error = GF_BAD_PARAM;
 						return NULL;
 					}
-					assert(ipmp_t->tag==GF_ODF_IPMP_TOOL_TAG);
+					gf_assert(ipmp_t->tag==GF_ODF_IPMP_TOOL_TAG);
 					gf_list_add( ((GF_IPMPX_GetToolsResponse *)desc)->ipmp_tools, ipmp_t);
 				}
 			}
@@ -3474,8 +3475,8 @@ GF_Err gf_bt_loader_run_intern(GF_BTParser *parser, GF_Command *init_com, Bool i
 				if (init_com) init_com->node = node;
 				else if (parser->load->flags & GF_SM_LOAD_CONTEXT_READY) {
 					GF_Command *com = gf_sg_command_new(parser->load->scene_graph, GF_SG_SCENE_REPLACE);
-					assert(!parser->bifs_au);
-					assert(parser->bifs_es);
+					gf_assert(!parser->bifs_au);
+					gf_assert(parser->bifs_es);
 					parser->bifs_au = gf_sm_stream_au_new(parser->bifs_es, 0, 0, 1);
 					gf_list_add(parser->bifs_au->commands, com);
 					com->node = node;
@@ -3584,7 +3585,7 @@ static GF_Err gf_sm_load_bt_initialize(GF_SceneLoader *load, const char *str, Bo
 
 	if (input_only) return GF_OK;
 
-	/*initalize default streams in the context*/
+	/*initialize default streams in the context*/
 
 	/*chunk parsing*/
 	if (load->flags & GF_SM_LOAD_CONTEXT_READY) {
@@ -3790,34 +3791,42 @@ GF_Err gf_sm_load_init_bt(GF_SceneLoader *load)
 GF_EXPORT
 GF_List *gf_sm_load_bt_from_string(GF_SceneGraph *in_scene, char *node_str, Bool force_wrl)
 {
-	GF_SceneLoader ctx;
-	GF_BTParser parser;
-	memset(&ctx, 0, sizeof(GF_SceneLoader));
-	ctx.scene_graph = in_scene;
-	memset(&parser, 0, sizeof(GF_BTParser));
-	parser.line_buffer = node_str;
-	parser.line_size = (u32) strlen(node_str);
-	parser.load = &ctx;
-	parser.top_nodes = gf_list_new();
-	parser.undef_nodes = gf_list_new();
-	parser.def_nodes = gf_list_new();
-	parser.peeked_nodes = gf_list_new();
-	parser.is_wrl = force_wrl;
-	gf_bt_loader_run_intern(&parser, NULL, 1);
-	gf_list_del(parser.undef_nodes);
-	gf_list_del(parser.def_nodes);
-	gf_list_del(parser.peeked_nodes);
-	while (gf_list_count(parser.def_symbols)) {
-		BTDefSymbol *d = (BTDefSymbol *)gf_list_get(parser.def_symbols, 0);
-		gf_list_rem(parser.def_symbols, 0);
+	GF_SceneLoader *ctx;
+	GF_BTParser *parser;
+	GF_SAFEALLOC(ctx,  GF_SceneLoader);
+	if (!ctx) return gf_list_new();
+	ctx->scene_graph = in_scene;
+	GF_SAFEALLOC(parser, GF_BTParser);
+	if (!parser) {
+		gf_free(ctx);
+		return gf_list_new();
+	}
+	parser->line_buffer = node_str;
+	parser->line_size = (u32) strlen(node_str);
+	parser->load = ctx;
+	parser->top_nodes = gf_list_new();
+	parser->undef_nodes = gf_list_new();
+	parser->def_nodes = gf_list_new();
+	parser->peeked_nodes = gf_list_new();
+	parser->is_wrl = force_wrl;
+	gf_bt_loader_run_intern(parser, NULL, 1);
+	gf_list_del(parser->undef_nodes);
+	gf_list_del(parser->def_nodes);
+	gf_list_del(parser->peeked_nodes);
+	while (gf_list_count(parser->def_symbols)) {
+		BTDefSymbol *d = (BTDefSymbol *)gf_list_get(parser->def_symbols, 0);
+		gf_list_rem(parser->def_symbols, 0);
 		gf_free(d->name);
 		gf_free(d->value);
 		gf_free(d);
 	}
-	gf_list_del(parser.def_symbols);
-	gf_list_del(parser.scripts);
+	gf_list_del(parser->def_symbols);
+	gf_list_del(parser->scripts);
+	GF_List *result = parser->top_nodes;
+	gf_free(parser);
+	gf_free(ctx);
 
-	return parser.top_nodes;
+	return result;
 }
 
 #endif /*GPAC_DISABLE_LOADER_BT*/

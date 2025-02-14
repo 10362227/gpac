@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS codec sub-project
@@ -523,7 +523,7 @@ GF_Err gf_bifs_dec_field(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node
 
 //	if (codec->LastError) return codec->LastError;
 
-	assert(node);
+	if (!node) return GF_BAD_PARAM;
 //	if (field->fieldType == GF_SG_VRML_UNKNOWN) return GF_NON_COMPLIANT_BITSTREAM;
 
 	if (gf_sg_vrml_is_sf_field(field->fieldType)) {
@@ -920,7 +920,7 @@ GF_Node *gf_bifs_dec_node(GF_BifsDecoder * codec, GF_BitStream *bs, u32 NDT_Tag)
 
 	/*QP 14 is a special quant mode for IndexFace/Line(2D)Set to quantize the
 	coordonate(2D) child, based on the first field parsed
-	we must check the type of the node and notfy the QP*/
+	we must check the type of the node and notify the QP*/
 	switch (node_tag) {
 	case TAG_MPEG4_Coordinate:
 	case TAG_MPEG4_Coordinate2D:

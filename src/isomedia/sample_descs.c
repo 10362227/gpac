@@ -970,6 +970,36 @@ GF_Err gf_isom_update_dims_description(GF_ISOFile *movie, u32 trackNumber, GF_DI
 
 #endif /*GPAC_DISABLE_ISOM_WRITE*/
 
+
+GF_EXPORT
+GF_Err gf_isom_get_udts_config(GF_ISOFile *movie, u32 trackNumber, u32 descriptionIndex, GF_UDTSConfig *cfg)
+{
+	GF_Box *sample_entry;
+	GF_TrackBox *trak = gf_isom_get_track_from_file(movie, trackNumber);
+	GF_UDTSSpecificBox *udts = NULL;
+
+	if (!trak || !descriptionIndex || !cfg) return GF_BAD_PARAM;
+	sample_entry = (GF_Box *)gf_list_get(trak->Media->information->sampleTable->SampleDescription->child_boxes, descriptionIndex-1);
+	if (sample_entry && sample_entry->type == GF_ISOM_BOX_TYPE_DTSX)
+		udts = (GF_UDTSSpecificBox *)gf_list_get(sample_entry->child_boxes, 0);
+
+	memset(cfg, 0, sizeof(GF_UDTSConfig));
+	if (!udts)
+		return GF_BAD_PARAM;
+
+	cfg->DecoderProfileCode = udts->cfg.DecoderProfileCode;
+	cfg->FrameDurationCode = udts->cfg.FrameDurationCode;
+	cfg->MaxPayloadCode = udts->cfg.MaxPayloadCode;
+	cfg->NumPresentationsCode = udts->cfg.NumPresentationsCode;
+	cfg->ChannelMask = udts->cfg.ChannelMask;
+	cfg->BaseSamplingFrequencyCode = udts->cfg.BaseSamplingFrequencyCode;
+	cfg->SampleRateMod = udts->cfg.SampleRateMod;
+	cfg->RepresentationType = udts->cfg.RepresentationType;
+	cfg->StreamIndex = udts->cfg.RepresentationType;
+	return GF_OK;
+}
+
+
 GF_Err LSR_UpdateESD(GF_LASeRSampleEntryBox *lsr, GF_ESD *esd)
 {
 	GF_BitRateBox *btrt = gf_isom_sample_entry_get_bitrate((GF_SampleEntryBox *)lsr, GF_TRUE);
@@ -1127,7 +1157,7 @@ GF_Err gf_isom_xml_subtitle_get_description(GF_ISOFile *the_file, u32 trackNumbe
 
 	entry = (GF_MetaDataSampleEntryBox *)gf_list_get(trak->Media->information->sampleTable->SampleDescription->child_boxes, StreamDescriptionIndex-1);
 	if (!entry) return GF_BAD_PARAM;
- 
+
 	if ((entry->type!=GF_ISOM_BOX_TYPE_STPP) && (entry->type!=GF_ISOM_BOX_TYPE_METX)) {
 		return GF_BAD_PARAM;
 	}
@@ -1625,7 +1655,7 @@ GF_Err gf_isom_update_bitrate(GF_ISOFile *movie, u32 trackNumber, u32 sampleDesc
 			}
 			continue;
 		}
-		
+
 		//using BTRT
 		if (!max_bitrate && average_bitrate) max_bitrate = average_bitrate;
 		a = gf_isom_sample_entry_get_bitrate(ent, max_bitrate ? GF_TRUE : GF_FALSE);
@@ -1691,7 +1721,7 @@ GF_Err gf_isom_tmcd_config_new(GF_ISOFile *the_file, u32 trackNumber, u32 fps_nu
 		if (!tcmi) return GF_OUT_OF_MEM;
 	}
 
-	entry = (GF_TimeCodeSampleEntryBox *) gf_isom_box_new_ex(GF_QT_BOX_TYPE_TMCD, GF_ISOM_BOX_TYPE_STSD, GF_FALSE, GF_FALSE);
+	entry = (GF_TimeCodeSampleEntryBox *) gf_isom_box_new_ex(GF_QT_BOX_TYPE_TMCD, GF_ISOM_BOX_TYPE_STSD, GF_FALSE, GF_FALSE, GF_FALSE);
 	if (!entry) return GF_OUT_OF_MEM;
 	entry->flags = 0;
 	if (is_drop) entry->flags |= 0x00000001;
@@ -1700,10 +1730,43 @@ GF_Err gf_isom_tmcd_config_new(GF_ISOFile *the_file, u32 trackNumber, u32 fps_nu
 	entry->timescale = fps_num;
 	entry->frame_duration = fps_den;
 	entry->frames_per_counter_tick = (u8) frames_per_counter_tick;
-	
+
 	entry->dataReferenceIndex = dataRefIndex;
 	e = gf_list_add(trak->Media->information->sampleTable->SampleDescription->child_boxes, entry);
 	*outDescriptionIndex = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
+	return e;
+}
+
+GF_EXPORT
+GF_Err gf_isom_evte_config_new(GF_ISOFile *the_file, u32 trackNumber, u32 *outDescriptionIndex)
+{
+	GF_TrackBox *trak;
+	GF_Err e;
+	u32 dataRefIndex;
+	GF_EventMessageSampleEntryBox *entry;
+
+	e = CanAccessMovie(the_file, GF_ISOM_OPEN_WRITE);
+	if (e) return e;
+
+	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	if (!trak || !trak->Media) return GF_BAD_PARAM;
+
+	//get or create the data ref
+	e = Media_FindDataRef(trak->Media->information->dataInformation->dref, NULL, NULL, &dataRefIndex);
+	if (e) return e;
+	if (!dataRefIndex) {
+		e = Media_CreateDataRef(the_file, trak->Media->information->dataInformation->dref, NULL, NULL, &dataRefIndex);
+		if (e) return e;
+	}
+	if (!the_file->keep_utc)
+		trak->Media->mediaHeader->modificationTime = gf_isom_get_mp4time();
+
+	entry = (GF_EventMessageSampleEntryBox *) gf_isom_box_new(GF_ISOM_BOX_TYPE_EVTE);
+	if (!entry) return GF_OUT_OF_MEM;
+	entry->dataReferenceIndex = dataRefIndex;
+	gf_list_add(trak->Media->information->sampleTable->SampleDescription->child_boxes, entry);
+	if (outDescriptionIndex) *outDescriptionIndex = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
+
 	return e;
 }
 
@@ -1756,6 +1819,9 @@ GF_Err gf_isom_new_mpha_description(GF_ISOFile *movie, u32 trackNumber, const ch
 	if (outDescriptionIndex) *outDescriptionIndex = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
 
 	if (dsi) {
+		if (dsi_size <=5)
+			return GF_BAD_PARAM;
+
 		mpa->cfg_mha = (GF_MHAConfigBox *) gf_isom_box_new_parent(&mpa->child_boxes, GF_ISOM_BOX_TYPE_MHAC);
 		if (!mpa->cfg_mha) return GF_OUT_OF_MEM;
 		mpa->cfg_mha->configuration_version = dsi[0];
@@ -1764,6 +1830,10 @@ GF_Err gf_isom_new_mpha_description(GF_ISOFile *movie, u32 trackNumber, const ch
 		mpa->cfg_mha->mha_config_size = dsi[3];
 		mpa->cfg_mha->mha_config_size <<= 8;
 		mpa->cfg_mha->mha_config_size |= dsi[4];
+
+		if (mpa->cfg_mha->mha_config_size < dsi_size-5)
+			return GF_BAD_PARAM;
+
 		mpa->cfg_mha->mha_config = gf_malloc(sizeof(u8) * mpa->cfg_mha->mha_config_size);
 		if (!mpa->cfg_mha->mha_config) return GF_OUT_OF_MEM;
 		memcpy(mpa->cfg_mha->mha_config, dsi+5, dsi_size-5);

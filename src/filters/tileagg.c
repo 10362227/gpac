@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2023
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / tile aggregrator filter
@@ -269,7 +269,9 @@ restart:
 			ctx->wait_pid = ctx->base_id;
 			return GF_OK;
 		} else if (!ctx->ttimeout || (!ctx->force_flush && (gf_sys_clock() - ctx->wait_start < ctx->ttimeout))) {
-			gf_filter_ask_rt_reschedule(filter, 1000);
+			//if not playing don't reschedule
+			if (ctx->is_playing)
+				gf_filter_ask_rt_reschedule(filter, 1000);
 			return GF_OK;
 		}
 		ctx->wait_pid = 0;
@@ -572,9 +574,10 @@ static const GF_FilterArgs TileAggArgs[] =
 
 GF_FilterRegister TileAggRegister = {
 	.name = "tileagg",
-	GF_FS_SET_DESCRIPTION("HEVC tile aggregator")
+	GF_FS_SET_DESCRIPTION("HEVC Tile aggregator")
 	GF_FS_SET_HELP("This filter aggregates a set of split tiled HEVC streams (`hvt1` or `hvt2` in ISOBMFF) into a single HEVC stream.")
 	.private_size = sizeof(GF_TileAggCtx),
+	.flags = GF_FS_REG_DYNAMIC_REUSE,
 	SETCAPS(TileAggCaps),
 	.initialize = tileagg_initialize,
 	.finalize = tileagg_finalize,
@@ -583,6 +586,7 @@ GF_FilterRegister TileAggRegister = {
 	.process = tileagg_process,
 	.process_event = tileagg_process_event,
 	.max_extra_pids = (u32) (-1),
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 const GF_FilterRegister *tileagg_register(GF_FilterSession *session)
