@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -219,7 +219,7 @@ static Bool get_default_install_path(char *file_path, u32 path_type)
 	}
 
 	/*we are looking for the config file path - make sure it is writable*/
-	assert(path_type == GF_PATH_CFG);
+	gf_assert(path_type == GF_PATH_CFG);
 
 	strcpy(szPath, file_path);
 	strcat(szPath, "\\gpaccfgtest.txt");
@@ -477,26 +477,83 @@ static Bool get_default_install_path(char *file_path, u32 path_type)
 		return 0;
 	}
 
+	/*check system install:
+		- share is PREFIX/share/gpac/
+		- mod_dir is PREFIX/LIBDIR/gpac/
+	*/
+	if ((path_type==GF_PATH_SHARE) || (path_type==GF_PATH_MODULES)) {
+		char lib_arch_scheme[100];
+		lib_arch_scheme[0] = 0;
 #if defined(GPAC_CONFIG_EMSCRIPTEN)
-	strcpy(app_path, "/usr/");
+		strcpy(app_path, "/usr/");
 #else
-	/*locate the app*/
-	if (!get_default_install_path(app_path, GF_PATH_APP)) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Couldn't find GPAC binaries install directory\n"));
-		return 0;
-	}
+		/*locate libgpac path first in case we are not run using gpac apps (eg python bindings)
+			if failure (static build) locate app
+		*/
+		if (!get_default_install_path(app_path, GF_PATH_LIB)) {
+			if (!get_default_install_path(app_path, GF_PATH_APP)) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Couldn't find GPAC binaries install directory\n"));
+				return 0;
+			}
+		}
 #endif
+		//check if we are a lib path and have a .gpac/ here
+		if ((path_type==GF_PATH_MODULES) && strstr(app_path, "/lib")) {
+			strcat(app_path, "/gpac");
+			if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+			char *sep = strrchr(app_path, '/');
+			if (sep) sep[0]=0;
+		}
 
-	/*installed or symlink on system, user user home directory*/
-	if (!strnicmp(app_path, "/usr/", 5) || !strnicmp(app_path, "/opt/", 5)) {
-		if (path_type==GF_PATH_SHARE) {
-			/*look in possible install dirs ...*/
+		//extract PREFIX
+		//app_path is either PREFIX/lib or PREFIX/lib/arch-specific (shared lib) or PREFIX/bin (if app)
+		//without trailing slash
+		char *root = strrchr(app_path, '/');
+		if (root) {
+			strncpy(lib_arch_scheme, root+1, 99);
+			lib_arch_scheme[99]=0;
+			root[0]=0;
+		}
+		//check if we have a /lib/arch-specific scheme
+		char *lib = strrchr(app_path, '/');
+		if (lib && !strncmp(lib, "/lib/", 4)) {
+			root = lib;
+			root[0] = 0;
+		} else {
+			lib_arch_scheme[0]=0;
+		}
+		if ((path_type==GF_PATH_SHARE) && root) {
+			strcat(app_path, "/share/gpac");
+			if (check_file_exists("gui/gui.bt", app_path, file_path)) return 1;
+
+			/*failsafe - look in possible install dirs ...*/
 			if (check_file_exists("gui/gui.bt", "/usr/share/gpac", file_path)) return 1;
 			if (check_file_exists("gui/gui.bt", "/usr/local/share/gpac", file_path)) return 1;
 			if (check_file_exists("gui/gui.bt", "/opt/share/gpac", file_path)) return 1;
 			if (check_file_exists("gui/gui.bt", "/opt/local/share/gpac", file_path)) return 1;
-		} else if (path_type==GF_PATH_MODULES) {
-			/*look in possible install dirs ...*/
+
+		} else if ((path_type==GF_PATH_MODULES) && root) {
+			//if arch-specific scheme try it first (to avoid loading 64bit versions for 32bit shared...)
+			if (lib_arch_scheme[0]) {
+				strcat(app_path, "/");
+				strcat(app_path, lib_arch_scheme);
+				strcat(app_path, "/gpac");
+				if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+				root[0]=0;
+			}
+			strcat(app_path, "/lib64/gpac");
+			if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+			root[0]=0;
+			strcat(app_path, "/lib/gpac");
+			if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+			root[0]=0;
+			strcat(app_path, "/lib/x86_64-linux-gnu/gpac");
+			if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+			root[0]=0;
+			strcat(app_path, "/lib/i386-linux-gnu/gpac");
+			if (check_file_exists(TEST_MODULE, app_path, file_path)) return 1;
+
+			/*failsafe - look in possible install dirs ...*/
 			if (check_file_exists(TEST_MODULE, "/usr/lib64/gpac", file_path)) return 1;
 			if (check_file_exists(TEST_MODULE, "/usr/lib/gpac", file_path)) return 1;
 			if (check_file_exists(TEST_MODULE, "/usr/local/lib/gpac", file_path)) return 1;
@@ -543,6 +600,8 @@ retry_lib:
 			if (sep) {
 				sep[0] = 0;
 				strcat(app_path, "/share");
+				if (check_file_exists("gui/gui.bt", app_path, file_path)) return 1;
+				strcat(app_path, "/gpac");
 				if (check_file_exists("gui/gui.bt", app_path, file_path)) return 1;
 			}
 			if (try_lib) {
@@ -597,6 +656,7 @@ retry_lib:
 	}
 
 	/*OSX way vs iPhone*/
+	get_default_install_path(app_path, GF_PATH_APP);
 	sep = strstr(app_path, ".app/");
 	if (sep) sep[4] = 0;
 
@@ -634,7 +694,7 @@ static void gf_ios_refresh_cache_directory( GF_Config *cfg, const char *file_pat
 	if (!res) return;
 
 	sep = strstr(res, ".gpac");
-	assert(sep);
+	gf_assert(sep);
 	sep[0] = 0;
 	gf_cfg_set_key(cfg, "core", "docs-dir", res);
 	if (!gf_cfg_get_key(cfg, "core", "last-dir"))
@@ -787,6 +847,7 @@ static GF_Config *create_default_config(char *file_path, const char *profile)
 	gf_cfg_set_key(cfg, "core", "font-dirs", szPath);
 
 	gf_cfg_set_key(cfg, "core", "cache-size", "100M");
+	gf_cfg_set_key(cfg, "core", "cache-check", "0");
 
 #if defined(_WIN32_WCE)
 	gf_cfg_set_key(cfg, "core", "video-output", "gapi");
@@ -823,6 +884,9 @@ static GF_Config *create_default_config(char *file_path, const char *profile)
 		if (gf_file_exists(gui_path)) {
 			gf_cfg_set_key(cfg, "core", "startup-file", gui_path);
 		}
+
+		sprintf(gui_path, "%s%cres%cca-bundle.crt", szPath, GF_PATH_SEPARATOR, GF_PATH_SEPARATOR);
+		gf_cfg_set_key(cfg, "core", "ca-bundle-default", gui_path);
 
 		/*shaders are at the same location*/
 		sprintf(gui_path, "%s%cshaders%cvertex.glsl", szPath, GF_PATH_SEPARATOR, GF_PATH_SEPARATOR);
@@ -940,6 +1004,7 @@ static void check_modules_dir(GF_Config *cfg)
 	if (gf_cfg_get_key(cfg, "core", "startup-file")==NULL) return;
 
 	if ( get_default_install_path(path, GF_PATH_SHARE) ) {
+		gf_cfg_set_key(cfg, "temp", "share_dir", path);
 		opt = gf_cfg_get_key(cfg, "core", "startup-file");
 		if (strstr(opt, "gui.bt") && strcmp(opt, path) && strstr(path, ".app") ) {
 #if defined(__DARWIN__) || defined(__APPLE__)
@@ -1038,7 +1103,7 @@ static GF_Config *gf_cfg_init(const char *profile)
 	if (profile && !prof_len)
 		profile = NULL;
 
-	if (profile && (strchr(profile, '/') || strchr(profile, '\\')) ) {
+	if (profile && strpbrk(profile, "/\\")) {
 		if (!gf_file_exists(profile)) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[core] Config file %s does not exist\n", profile));
 			goto exit;
@@ -1116,6 +1181,18 @@ static GF_Config *gf_cfg_init(const char *profile)
 			}
 			if (rescan_fonts)
 				gf_opts_set_key("core", "rescan-fonts", "yes");
+
+			// if ca-bundle is not set or explicitly disabled (empty string), set to default
+			const char* ca_bundle = gf_cfg_get_key(cfg, "core", "ca-bundle-default");
+			if (!ca_bundle) {
+				char szShare[GF_MAX_PATH];
+				if (get_default_install_path(szShare, GF_PATH_SHARE)) {
+					char gui_path[GF_MAX_PATH + 100];
+
+					sprintf(gui_path, "%s%cres%cca-bundle.crt", szShare, GF_PATH_SEPARATOR, GF_PATH_SEPARATOR);
+					gf_cfg_set_key(cfg, "core", "ca-bundle-default", gui_path);
+				}
+			}
 		}
 	}
 	//no config file found
@@ -1179,6 +1256,11 @@ exit:
 GF_EXPORT
 Bool gf_opts_default_shared_directory(char *path_buffer)
 {
+	const char *opt = gf_opts_get_key("temp", "share_dir");
+	if (opt) {
+		strcpy(path_buffer, opt);
+		return 1;
+	}
 	return get_default_install_path(path_buffer, GF_PATH_SHARE);
 }
 
@@ -1318,11 +1400,17 @@ GF_Err gf_opts_save()
 
 #include <gpac/main.h>
 
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+#define LOGFILE_HELP	"set output log file - use `console` for browser console"
+#else
+#define LOGFILE_HELP	"set output log file"
+#endif
+
 GF_GPACArg GPAC_Args[] = {
- GF_DEF_ARG("tmp", NULL, "specify directory for temporary file creation instead of OS-default temporary file management", NULL, NULL, GF_ARG_STRING, 0),
+ GF_DEF_ARG("tmp", NULL, "specify directory for temporary file creation instead of OS-default temporary file management", NULL, NULL, GF_ARG_STRING, GF_ARG_SUBSYS_CORE),
  GF_DEF_ARG("noprog", NULL, "disable progress messages", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_LOG),
  GF_DEF_ARG("quiet", NULL, "disable all messages, including errors", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_LOG),
- GF_DEF_ARG("log-file", "lf", "set output log file", NULL, NULL, GF_ARG_STRING, GF_ARG_SUBSYS_LOG),
+ GF_DEF_ARG("log-file", "lf", LOGFILE_HELP, NULL, NULL, GF_ARG_STRING, GF_ARG_SUBSYS_LOG),
  GF_DEF_ARG("log-clock", "lc", "log time in micro sec since start time of GPAC before each log line except for `app` tool", NULL, NULL, GF_ARG_BOOL, GF_ARG_SUBSYS_LOG),
  GF_DEF_ARG("log-utc", "lu", "log UTC time in ms before each log line except for `app` tool", NULL, NULL, GF_ARG_BOOL, GF_ARG_SUBSYS_LOG),
  GF_DEF_ARG("logs", NULL, "set log tools and levels.  \n"
@@ -1335,6 +1423,7 @@ GF_GPACArg GPAC_Args[] = {
 	        "- warning: logs error+warning messages\n"
 	        "- info: logs error+warning+info messages\n"
 	        "- debug: logs all messages\n"
+	        "- strict: exit if error for this log tool and use default log level if tool\n"
 	        "\n`toolX` can be one of:\n"
 	        "- core: libgpac core\n"
 	        "- mutex: log all mutex calls\n"
@@ -1362,9 +1451,10 @@ GF_GPACArg GPAC_Args[] = {
 	        "- ctime: media and SMIL timing info from composition engine\n"
 	        "- interact: interaction messages (UI events and triggered DOM events and VRML route)\n"
 	        "- rti: run-time stats of compositor\n"
-	        "- all: all tools logged - other tools can be specified afterwards.  \n"
+	        "- all: all tools logged - other tools can be specified afterwards\n"
 	        "The special keyword `ncl` can be set to disable color logs.  \n"
-	        "The special keyword `strict` can be set to exit at first error.  \n"
+	        "The special keyword `strict` can be set to exit at first error on any tool.  \n"
+	        "`levelX` can accept the suffix `+strict` to force strict error only for the given log tool(s).   \n"
 	        "\nEX -logs=all@info:dash@debug:ncl\n"
 			"This moves all log to info level, dash to debug level and disable color logs"
  			, NULL, NULL, GF_ARG_STRING, GF_ARG_SUBSYS_LOG),
@@ -1410,38 +1500,50 @@ GF_GPACArg GPAC_Args[] = {
  GF_DEF_ARG("no-tls-rcfg", NULL, "disable automatic TCP to TLS reconfiguration", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
  GF_DEF_ARG("no-fd", NULL, "use buffered IO instead of file descriptor for read/write - this can speed up operations on small files", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
  GF_DEF_ARG("no-mx", NULL, "disable all mutexes, threads and semaphores (do not use if unsure about threading used)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
+ GF_DEF_ARG("xml-max-csize", NULL, "maximum XML content or attribute size", "100k", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
+ GF_DEF_ARG("users", NULL, "authentication configuration file for users and groups", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
+
+
 #ifndef GPAC_DISABLE_NETCAP
- GF_DEF_ARG("netcap-dst", NULL, "output packets to indicated file", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
- GF_DEF_ARG("netcap-src", NULL, "read packets from indicated file, as produced by -netcap-dst or a pcap or pcapng file", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
- GF_DEF_ARG("netcap-nrt", NULL, "ignore real-time regulation when reading packet from capture file", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
- GF_DEF_ARG("netcap-loop", NULL, "set number of loops of capture file, -1 means forever", NULL, NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
- GF_DEF_ARG("net-filter", NULL, "set packet filtering rules (live or from file). Value is a list of `{OPT,OPT2...}` with OPT in:\n"
- "- m=N: set rule mode - `N` can be `r` for reception only (default), `w` for send only or `rw` for both\n"
- "- s=N: set packet start range to `N`\n"
- "- e=N: set packet end range to `N` (only used for `r` and `f` rules)\n"
- "- n=N: set number of packets to drop to `N`, 0 or 1 means single packet\n"
- "- r=N: random drop one packet every `N`\n"
- "- f=N: drop first packet every `N`\n"
- "- p=P: local port number to filter, if not set the rule applies to all packets\n"
- "- o=N: patch packet instead of droping (always true for TCP), replacing byte at offset `N` (0 is first byte, <0 for random)\n"
- "- v=N: set patch byte value to `N` (hexa) or negative value for random (default)\n"
- "\nEX {p=1234,s=100,n=20}{r=200,s=500,o=10,v=FE}\n"
- "This will drop packets 100 to 119 on port 1234 and patch one random packet every 200 starting from packet 500, setting byte 10 to FE", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
+ GF_DEF_ARG("netcap", NULL, "set packet capture and filtering rules formatted as [CFG][RULES]. Each `-netcap` argument will define a configuration\n"
+ "[CFG] is an optional comma-separated list of:\n"
+ "- id=ID: ID (string) for this configuration. If NULL, configuration will apply to all sockets not specifying a netcap ID\n"
+ "- src=F: read packets from `F`, as produced by GPAC or a pcap or pcapng file\n"
+ "- dst=F: output packets to `F` (GPAC or pcap/pcapng file), cannot be set if src is set\n"
+ "- loop[=N]: loop capture file N times, or forever if N is not set or negative\n"
+ "- nrt: disable real-time playback\n"
+ "[RULES] is an optional list of `[OPT,OPT2...]` with OPT in:\n"
+ "- m=K: set rule mode - `K` can be `r` for reception only (default), `w` for send only or `rw` for both\n"
+ "- s=K: set packet start range to `K`\n"
+ "- e=K: set packet end range to `K` - only used for `r` and `f` rules, 0 or not set means rule apply until end\n"
+ "- n=K: set number of packets to drop to `K` - not set, 0 or 1 means single packet\n"
+ "- r=K: random drop `n` packet every `K`\n"
+ "- f=K: drop first `n` packets every `K`\n"
+ "- d=K: reorder `n` packets after the next `K` packets, can be used with `f` or `r` rules\n"
+ "- p=K: filter packets on port `K` only, if not set the rule applies to all packets\n"
+ "- o=K: patch packet instead of droping (always true for TCP), replacing byte at offset `K` (0 is first byte, <0 for random)\n"
+ "- v=K: set patch byte value to `K` (hexa) or negative value for random (default)\n"
+ "\nEX -netcap=dst=dump.gpc\n"
+ "This will record packets to dump.gpc\n"
+ "\nEX -netcap=src=dump.gpc,id=NC1 -i session1.sdp:NCID=NC1 -i session2.sdp\n"
+ "This will read packets from dump.gpc only for session1.sdp and let session2.sdp use regular sockets\n"
+ "\nEX -netcap=[p=1234,s=100,n=20][r=200,s=500,o=10,v=FE]\n"
+ "This will use regular network interface and drop packets 100 to 119 on port 1234 and patch one random packet every 200 starting from packet 500, setting byte 10 to FE", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_CORE),
 #endif
 
  GF_DEF_ARG("cache", NULL, "cache directory location", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
- GF_DEF_ARG("proxy-on", NULL, "enable HTTP proxy", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
- GF_DEF_ARG("proxy-name", NULL, "set HTTP proxy address", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
- GF_DEF_ARG("proxy-port", NULL, "set HTTP proxy port", "80", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
+ GF_DEF_ARG("proxy", NULL, "set HTTP proxy server address and port (if no protocol scheme is set, use same as target)", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("maxrate", NULL, "set max HTTP download rate in bits per sec. 0 means unlimited", NULL, NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("no-cache", NULL, "disable HTTP caching", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("offline-cache", NULL, "enable offline HTTP caching (no re-validation of existing resource in cache)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("clean-cache", NULL, "indicate if HTTP cache should be clean upon launch/exit", NULL, NULL, GF_ARG_BOOL, GF_ARG_SUBSYS_HTTP),
- GF_DEF_ARG("cache-size", NULL, "specify cache size in bytes", "100M", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
+ GF_DEF_ARG("cache-size", NULL, "specify maximum cache size on disk in bytes", "100M", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
+ GF_DEF_ARG("cache-check", NULL, "cache clean interval in seconds, 0 only clean cache at startup", "60", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("tcp-timeout", NULL, "time in milliseconds to wait for HTTP/RTSP connect before error", "5000", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("req-timeout", NULL, "time in milliseconds to wait on HTTP/RTSP request before error (0 disables timeout)", "10000", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("no-timeout", NULL, "ignore HTTP 1.1 timeout in keep-alive", "false", NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("broken-cert", NULL, "enable accepting broken SSL certificates", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
+ GF_DEF_ARG("ca-bundle", NULL, "path to a custom CA certificates bundle file", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT | GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("user-agent", "ua", "set user agent name for HTTP/RTSP", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("user-profileid", NULL, "set user profile ID (through **X-UserProfileID** entity header) in HTTP requests", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("user-profile", NULL, "set user profile filename. Content of file is appended as body to HTTP HEAD/GET requests, associated Mime is **text/xml**", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
@@ -1450,13 +1552,20 @@ GF_GPACArg GPAC_Args[] = {
  GF_DEF_ARG("cte-rate-wnd", NULL, "set window analysis length in milliseconds for chunk-transfer encoding rate estimation", "20", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("cred", NULL, "path to 128 bits key for credential storage", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
 
-#ifdef GPAC_HAS_HTTP2
+#if defined(GPAC_HAS_HTTP2) || defined(GPAC_HAS_CURL)
  GF_DEF_ARG("no-h2", NULL, "disable HTTP2", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
+#endif
+#ifdef GPAC_HAS_HTTP2
  GF_DEF_ARG("no-h2c", NULL, "disable HTTP2 upgrade (i.e. over non-TLS)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
  GF_DEF_ARG("h2-copy", NULL, "enable intermediate copy of data in nghttp2 (default is disabled but may report as broken frames in wireshark)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
 #endif
 
- GF_DEF_ARG("dbg-edges", NULL, "log edges status in filter graph before dijkstra resolution (for debug). Edges are logged as edge_source(status, weight, src_cap_idx, dst_cap_idx)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
+#ifdef GPAC_HAS_CURL
+ GF_DEF_ARG("curl", NULL, "use CURL instead of GPAC HTTP stack", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
+ GF_DEF_ARG("no-h3", NULL, "disable HTTP3 (CURL only)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HTTP),
+#endif
+
+ GF_DEF_ARG("dbg-edges", NULL, "log edges status in filter graph before dijkstra resolution (for debug). Edges are logged as edge_source(status(disable_depth), weight, src_cap_idx -> dst_cap_idx)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("full-link", NULL, "throw error if any PID in the filter graph cannot be linked", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("no-dynf", NULL, "disable dynamically loaded filters", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
 
@@ -1474,6 +1583,7 @@ GF_GPACArg GPAC_Args[] = {
 		"- direct: no threads and direct dispatch of tasks whenever possible (debug mode)", "free", "free|lock|flock|freex|direct", GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("max-chain", NULL, "set maximum chain length when resolving filter links. Default value covers for __[ in -> ] dmx -> reframe -> decode -> encode -> reframe -> mx [ -> out]__. Filter chains loaded for adaptation (e.g. pixel format change) are loaded after the link resolution. Setting the value to 0 disables dynamic link resolution. You will have to specify the entire chain manually", "6", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("max-sleep", NULL, "set maximum sleep time slot in milliseconds when regulation is enabled", "50", NULL, GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
+ GF_DEF_ARG("step-link", NULL, "load filters one by one when solvink a link instead of loading all filters for the solved path", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_FILTERS),
 
  GF_DEF_ARG("threads", NULL, "set N extra thread for the session. -1 means use all available cores", NULL, NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("no-probe", NULL, "disable data probing on sources and relies on extension (faster load but more error-prone)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
@@ -1484,6 +1594,8 @@ GF_GPACArg GPAC_Args[] = {
  GF_DEF_ARG("buffer-gen", NULL, "default buffer size in microseconds for generic pids", "1000", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("buffer-dec", NULL, "default buffer size in microseconds for decoder input pids", "1000000", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
  GF_DEF_ARG("buffer-units", NULL, "default buffer size in frames when timing is not available", "1", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
+
+ GF_DEF_ARG("check-props", NULL, "check known property types upon assignment and PID vs packet types upon fetch (in test mode, exit with error code 5 if mismatch)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_FILTERS),
 
  GF_DEF_ARG("gl-bits-comp", NULL, "number of bits per color component in OpenGL", "8", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_VIDEO),
  GF_DEF_ARG("gl-bits-depth", NULL, "number of bits for depth buffer in OpenGL", "16", NULL, GF_ARG_INT, GF_ARG_HINT_ADVANCED|GF_ARG_SUBSYS_VIDEO),
@@ -1521,6 +1633,7 @@ GF_DEF_ARG("charset", NULL, "set charset when not recognized from input. Possibl
  GF_DEF_ARG("vvdec-annexb", NULL, "hack for old vvdec+libavcodec supporting only annexB format", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HACKS),
  GF_DEF_ARG("heif-hevc-urn", NULL, "use HEVC URN for alpha and depth in HEIF instead of MPEG-B URN (HEIF first edition)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HACKS),
  GF_DEF_ARG("boxdir", NULL, "use box definitions in the given directory for XML dump", NULL, NULL, GF_ARG_STRING, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HACKS),
+ GF_DEF_ARG("no-mabr-patch", NULL, "disable GPAC parsing of patched isom boxes from mabr (will behave like most browsers/players)", NULL, NULL, GF_ARG_BOOL, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_HACKS),
 
 
  {0}
@@ -1867,10 +1980,15 @@ void gf_sys_print_arg(FILE *helpout, GF_SysPrintArgFlags flags, const GF_GPACArg
 		fprintf(helpout, ".TP\n.B %s%s", (flags&GF_PRINTARG_NO_DASH) ? "" : "\\-", arg_name ? arg_name : arg->name);
 	}
 	else if (gen_doc==1) {
+		fprintf(helpout,"<div markdown class=\"option\">\n");
 		if (flags&GF_PRINTARG_NO_DASH) {
 			gf_sys_format_help(helpout, flags | GF_PRINTARG_HIGHLIGHT_FIRST, "%s", arg_name ? arg_name : arg->name);
 		} else {
-			gf_sys_format_help(helpout, flags, "<a id=\"%s\">", arg_name ? arg_name : arg->name);
+			if (arg->flags & (GF_ARG_HINT_ADVANCED|GF_ARG_HINT_EXPERT)) {
+				gf_sys_format_help(helpout, flags, "<a id=\"%s\">", arg_name ? arg_name : arg->name);
+			} else {
+				gf_sys_format_help(helpout, flags, "<a id=\"%s\" data-level=\"basic\">", arg_name ? arg_name : arg->name);
+			}
 			gf_sys_format_help(helpout, flags | GF_PRINTARG_HIGHLIGHT_FIRST, "-%s", arg_name ? arg_name : arg->name);
 			gf_sys_format_help(helpout, flags, "</a>");
 		}
@@ -1924,6 +2042,9 @@ void gf_sys_print_arg(FILE *helpout, GF_SysPrintArgFlags flags, const GF_GPACArg
 			gf_sys_format_help(helpout, flags | GF_PRINTARG_OPT_DESC, ": %s", gf_sys_localized(arg_subsystem, arg->name, arg->description) );
 		}
 		gf_sys_format_help(helpout, flags, "\n");
+		if(gen_doc==1) {
+			fprintf(helpout, "</div>\n");
+		}
 	}
 
 	if ((gen_doc==1) && arg->description && strstr(arg->description, "- "))
@@ -2049,6 +2170,8 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 	Bool escape_pipe = GF_FALSE;
 	Bool prev_was_example = GF_FALSE;
 	Bool prev_has_line_after = GF_FALSE;
+	Bool prev_has_colon = GF_FALSE;
+	u32 list_depth = 0;
 	u32 gen_doc = 0;
 	u32 is_app_opts = 0;
 	if (flags & GF_PRINTARG_MD) {
@@ -2098,6 +2221,8 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 		GF_ConsoleCodes console_code = GF_CONSOLE_RESET;
 		Bool line_before = GF_FALSE;
 		Bool line_after = GF_FALSE;
+		Bool add_backquote = GF_FALSE;
+
 		const char *footer_string = NULL;
 		const char *header_string = NULL;
 		char *next_line = strchr(line, '\n');
@@ -2110,6 +2235,23 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 			line = next_line+1;
 			line_pos=0;
 			continue;
+		}
+		if (!line[0]) flags &= ~GF_PRINTARG_HIGHLIGHT_FIRST;
+
+		//detect list start/end for mkdocs
+		if (gen_doc==1) {
+			u32 llev = 0;
+			if (!strncmp(line, "- ", 2)) llev=1;
+			else if (!strncmp(line, " - ", 3) || !strncmp(line, "  - ", 3)) llev=2;
+			else if (!strncmp(line, "    - ", 6)) llev=3;
+			if (llev>list_depth) {
+				list_depth = llev;
+				fprintf(helpout, "\n");
+			}
+			else if (llev<list_depth) {
+				list_depth = llev;
+				fprintf(helpout, "\n");
+			}
 		}
 
 		if ((line[0]=='#') && (line[1]==' ')) {
@@ -2148,13 +2290,13 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 			console_code = GF_CONSOLE_YELLOW;
 
 			if (gen_doc==1) {
-				header_string = "Example\n```\n";
-				footer_string = "\n```";
+				header_string = prev_has_colon ? "```\n" : "Example\n```\n";
+				footer_string = "\n```\n";
 			} else if (gen_doc==2) {
-				header_string = "Example\n.br\n";
+				header_string = prev_has_colon ? ".br\n" : "Example\n.br\n";
 				footer_string = "\n.br\n";
 			} else {
-				header_string = "Example:\n";
+				header_string = prev_has_colon ? NULL : "Example:\n";
 			}
 
 			if (prev_was_example) {
@@ -2179,25 +2321,48 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 			)
 
 			//look for ": "
-			&& ((tok_sep=strstr(line, ": ")) != NULL )
+			&& ( ((tok_sep=strstr(line, ": ")) != NULL ) || list_depth)
 		) {
 			if (!gen_doc)
 				fprintf(helpout, "\t");
 			while (line[0] != '-') {
-				fprintf(helpout, " ");
+				if (!list_depth) {
+					fprintf(helpout, " ");
+				}
 				line++;
 				line_pos++;
 
 			}
-			fprintf(helpout, "* ");
+			if (list_depth && (gen_doc==1)) {
+				if (list_depth==3)
+					fprintf(helpout, "        - ");
+				else if (list_depth==2)
+					fprintf(helpout, "    - ");
+				else fprintf(helpout, "- ");
+				//for MD avoid "- #" which corrupts heading levels, enclose with backquote
+				if (tok_sep && ((line[2]=='#') || (line[3]=='#') || (line[4]=='#'))) {
+					fprintf(helpout, "`");
+					add_backquote=GF_TRUE;
+				}
+			} else {
+				fprintf(helpout, "* ");
+			}
 			line_pos+=2;
 			if (!gen_doc)
 				gf_sys_set_console_code(helpout, GF_CONSOLE_YELLOW);
-			tok_sep[0] = 0;
-			fprintf(helpout, "%s", line+2);
-			line_pos += (u32) strlen(line+2);
-			tok_sep[0] = ':';
-			line = tok_sep;
+			if (tok_sep) {
+				tok_sep[0] = 0;
+				fprintf(helpout, "%s", line+2);
+				if (add_backquote) {
+					fprintf(helpout, "`");
+					add_backquote = GF_FALSE;
+				}
+				line_pos += (u32) strlen(line+2);
+				tok_sep[0] = ':';
+				line = tok_sep;
+			} else {
+				line += 2;
+			}
 			if (!gen_doc)
 				gf_sys_set_console_code(helpout, GF_CONSOLE_RESET);
 		} else if (flags & (GF_PRINTARG_HIGHLIGHT_FIRST | GF_PRINTARG_OPT_DESC)) {
@@ -2413,7 +2578,7 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 
 			if (has_token && tid==TOK_OPTLINK) {
 				char *link = strchr(line, '(');
-				assert(link);
+				gf_assert(link);
 				link++;
 				char *end_link = strchr(line, ')');
 				if (end_link) end_link[0] = 0;
@@ -2436,6 +2601,9 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 					} else if (!strncmp(link, "MP4B_GEN", 8)) {
 						fprintf(helpout, "[-%s](mp4box-gen-opts/#%s)", line, line);
 						line_pos+=7 + 2* (u32)strlen(line) + (u32)strlen("mp4box-gen-opts");
+					} else if (!strncmp(link, "MP4B_IMP", 8)) {
+						fprintf(helpout, "[-%s](mp4box-import-opts/#%s)", line, line);
+						line_pos+=7 + 2* (u32)strlen(line) + (u32)strlen("mp4box-import-opts");
 					} else if (strlen(link)) {
 						fprintf(helpout, "[-%s](%s/#%s)", line, link, line);
 						line_pos+=7 + 2* (u32)strlen(line) + (u32)strlen(link);
@@ -2501,6 +2669,10 @@ void gf_sys_format_help(FILE *helpout, GF_SysPrintArgFlags flags, const char *fm
 		}
 
 		if (!next_line) break;
+		prev_has_colon = GF_FALSE;
+		if (line[0] && line[strlen(line)-1]==':')
+			prev_has_colon = GF_TRUE;
+
 		next_line[0]=0;
 		if (gen_doc==1) fprintf(helpout, "  ");
 		line = next_line+1;
@@ -2538,9 +2710,20 @@ Bool gf_sys_word_match(const char *orig, const char *dst)
 	s32 dist = 0;
 	u32 match = 0;
 	u32 i;
-	u32 olen = (u32) strlen(orig);
-	u32 dlen = (u32) strlen(dst);
+	u32 olen, dlen;
 	u32 *run;
+
+	if (orig == NULL && dst == NULL) {
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, (" gf_sys_word_match: NULL arguments \n"));
+		return GF_TRUE;
+	}
+	if (orig == NULL || dst == NULL) {
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, (" gf_sys_word_match: NULL argument \n"));
+		return GF_FALSE;
+	}
+
+	olen = (u32) strlen(orig);
+	dlen = (u32) strlen(dst);
 
 	if ((olen>=3) && (olen<dlen) && !strncmp(orig, dst, olen))
 		return GF_TRUE;

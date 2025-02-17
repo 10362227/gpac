@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2023
+ *			Copyright (c) Telecom ParisTech 2023-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / WebCodec decoder filter
@@ -23,11 +23,10 @@
  *
  */
 
-
 #include <gpac/internal/media_dev.h>
 #include <gpac/constants.h>
 
-#if defined(GPAC_CONFIG_EMSCRIPTEN)
+#ifndef GPAC_DISABLE_WEBCODEC
 
 typedef struct
 {
@@ -48,6 +47,8 @@ typedef struct
 	Bool playing;
 	char szCodec[RFC6381_CODEC_NAME_SIZE_MAX];
 } GF_WCDecCtx;
+
+#if defined(GPAC_CONFIG_EMSCRIPTEN)
 
 GF_EXPORT
 void wcdec_on_error(GF_WCDecCtx *ctx, int state, char *msg)
@@ -305,7 +306,6 @@ void wcdec_on_frame_copy(GF_WCDecCtx *ctx, GF_FilterPacket *pck, int res_ok)
 
 	if (!ctx->pending_frames && (ctx->in_flush==2))
 		gf_filter_pid_set_eos(ctx->opid);
-
 }
 
 u32 webcodec_pixfmt_to_gpac(char *format)
@@ -538,7 +538,7 @@ static GF_Err wcdec_process(GF_Filter *filter)
 			return GF_OK;
 		}
 		in_buffer = (u8 *) gf_filter_pck_get_data(pck, &in_buffer_size);
-		cts = gf_timestamp_rescale( gf_filter_pck_get_cts(pck), ctx->timescale, 1000000);
+		cts = gf_timestamp_rescale(gf_filter_pck_get_cts(pck), ctx->timescale, 1000000);
 		sap = gf_filter_pck_get_sap(pck);
 		//queue input
 		if (ctx->width) {
@@ -620,6 +620,17 @@ static GF_FilterCapability WCDecCapsA[] =
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
 };
 
+#else
+static GF_Err wcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
+{
+	return GF_NOT_SUPPORTED;
+}
+static GF_Err wcdec_process(GF_Filter *filter)
+{
+	return GF_NOT_SUPPORTED;
+}
+#endif
+
 static GF_FilterCapability WCDecCapsAV[] =
 {
 	CAP_UINT(GF_CAPS_INPUT_OUTPUT,GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
@@ -637,7 +648,7 @@ static GF_FilterCapability WCDecCapsAV[] =
 
 static const GF_FilterArgs WCDecArgs[] =
 {
-	{ OFFS(queued), "Maximum number of packets to queue in webcodec instance", GF_PROP_UINT, "10", NULL, 0},
+	{ OFFS(queued), "maximum number of packets to queue in webcodec instance", GF_PROP_UINT, "10", NULL, 0},
 	{0}
 };
 
@@ -649,16 +660,22 @@ GF_FilterRegister GF_WCDecCtxRegister = {
 	SETCAPS(WCDecCapsAV),
 	.flags = GF_FS_REG_SINGLE_THREAD|GF_FS_REG_ASYNC_BLOCK,
 	.private_size = sizeof(GF_WCDecCtx),
+#if defined(GPAC_CONFIG_EMSCRIPTEN)
 	.initialize = wcdec_initialize,
 	.finalize = wcdec_finalize,
+	.process_event = wcdec_process_event,
+#endif
 	.configure_pid = wcdec_configure_pid,
 	.process = wcdec_process,
-	.process_event = wcdec_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
+#endif //GPAC_DISABLE_WEBCODEC
 
 const GF_FilterRegister *wcdec_register(GF_FilterSession *session)
 {
+#ifndef GPAC_DISABLE_WEBCODEC
+#if defined(GPAC_CONFIG_EMSCRIPTEN)
 	int has_webv_decode = EM_ASM_INT({
 		if (typeof VideoDecoder == 'undefined') return 0;
 		return 1;
@@ -680,6 +697,13 @@ const GF_FilterRegister *wcdec_register(GF_FilterSession *session)
 		GF_WCDecCtxRegister.nb_caps = sizeof(WCDecCapsV)/sizeof(GF_FilterCapability);
 	}
 	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[WebDec] AudioDecoder %d - VideoDecoder %d\n", has_weba_decode, has_webv_decode));
-	return &GF_WCDecCtxRegister;
-}
+#else
+	if (!gf_opts_get_bool("temp", "gendoc"))
+		return NULL;
+	GF_WCDecCtxRegister.version = "! Warning: WebCodec NOT AVAILABLE IN THIS BUILD !";
 #endif
+	return &GF_WCDecCtxRegister;
+#else
+	return NULL;
+#endif
+}

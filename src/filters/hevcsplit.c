@@ -4,7 +4,7 @@
  *			Authors: Jean Le Feuvre
  *					 Yacine Mathurin Boubacar Aziakou
  *					 Samir Mustapha
- *			Copyright (c) Telecom ParisTech 2019-2023
+ *			Copyright (c) Telecom ParisTech 2019-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / HEVC tile split and rewrite filter
@@ -465,8 +465,8 @@ static u32 hevcsplit_remove_slice_address(GF_HEVCSplitCtx *ctx, u8 *in_slice, u3
 	else gf_bs_reassign_buffer(ctx->bs_nal_out, ctx->output_no_epb, ctx->output_no_epb_alloc);
 
 
-	assert(hevc->s_info.header_size_bits >= 0);
-	assert(hevc->s_info.entry_point_start_bits >= 0);
+	gf_assert(hevc->s_info.header_size_bits >= 0);
+	gf_assert(hevc->s_info.entry_point_start_bits >= 0);
 	header_end = (u64) hevc->s_info.header_size_bits;
 
 	num_entry_point_start = (u32) hevc->s_info.entry_point_start_bits;
@@ -789,7 +789,7 @@ static GF_Err hevcsplit_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool
 			u32 tile_idx = i * cols + j;
 			HEVCTilePid *tpid = gf_list_get(ctx->outputs, tile_idx);
 			if (!tpid) {
-				assert(gf_list_count(ctx->outputs) == tile_idx);
+				gf_assert(gf_list_count(ctx->outputs) == tile_idx);
 
 				GF_SAFEALLOC(tpid, HEVCTilePid);
 				if (!tpid) return GF_OUT_OF_MEM;
@@ -982,7 +982,7 @@ static const GF_FilterArgs HEVCSplitArgs[] =
 
 GF_FilterRegister HEVCSplitRegister = {
 	.name = "hevcsplit",
-	GF_FS_SET_DESCRIPTION("HEVC tile splitter")
+	GF_FS_SET_DESCRIPTION("HEVC Tile extractor")
 	GF_FS_SET_HELP("This filter splits a motion-constrained tiled HEVC PID into N independent HEVC PIDs.\n"
 			"Use hevcmerge filter to merge initially motion-constrained tiled HEVC PID in a single output.")
 	.private_size = sizeof(GF_HEVCSplitCtx),
@@ -994,6 +994,7 @@ GF_FilterRegister HEVCSplitRegister = {
 	.args = HEVCSplitArgs,
 	.configure_pid = hevcsplit_configure_pid,
 	.process = hevcsplit_process,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 const GF_FilterRegister* hevcsplit_register(GF_FilterSession *session)

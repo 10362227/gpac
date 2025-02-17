@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2023
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / RAW video (YUV,RGB) reframer filter
@@ -297,7 +297,7 @@ GF_Err rawvidreframe_process(GF_Filter *filter)
 				else if (data[0] == 'H') ctx->size.y = atoi(data+1);
 				else if (data[0] == 'F') sscanf(data+1, "%d:%d", &ctx->fps.num, &ctx->fps.den);
 				else if (data[0] == 'A') {
-					GF_Fraction sar;
+					GF_Fraction sar = {0,1};
 					sscanf(data+1, "%d:%d", &sar.num, &sar.den);
 					gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAR, &PROP_FRAC(sar));
 				}
@@ -363,7 +363,7 @@ GF_Err rawvidreframe_process(GF_Filter *filter)
 
 		Bool use_ref = GF_FALSE;
 		if (!ctx->out_pck) {
-			assert(! ctx->nb_bytes_in_frame);
+			gf_assert(! ctx->nb_bytes_in_frame);
 			if (!ctx->copy && (pck_size >= ctx->frame_size)) {
 				ctx->out_pck = gf_filter_pck_new_ref(ctx->opid, offset_in_pck, ctx->frame_size, pck);
 				use_ref = GF_TRUE;
@@ -401,7 +401,7 @@ GF_Err rawvidreframe_process(GF_Filter *filter)
 			data += remain;
 			byte_offset += remain;
 			offset_in_pck += remain;
-			
+
 			ctx->out_pck = NULL;
 			ctx->nb_bytes_in_frame = 0;
 
@@ -489,7 +489,8 @@ GF_FilterRegister RawVidReframeRegister = {
 	.configure_pid = rawvidreframe_configure_pid,
 	.probe_data = rawvidreframe_probe_data,
 	.process = rawvidreframe_process,
-	.process_event = rawvidreframe_process_event
+	.process_event = rawvidreframe_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
@@ -505,5 +506,3 @@ const GF_FilterRegister *rfrawvid_register(GF_FilterSession *session)
 	return NULL;
 }
 #endif //#ifndef GPAC_DISABLE_RFRAWVID
-
-

@@ -195,8 +195,8 @@ static void svg_traverse_font(GF_Node *node, void *rs, Bool is_destroy)
 static void svg_font_on_load(GF_Node *handler, GF_DOM_Event *event, GF_Node *observer)
 {
 	GF_Font *font;
-	assert(event->currentTarget->ptr_type==GF_DOM_EVENT_TARGET_NODE);
-	assert(gf_node_get_tag((GF_Node*)event->currentTarget->ptr)==TAG_SVG_font);
+	gf_assert(event->currentTarget->ptr_type==GF_DOM_EVENT_TARGET_NODE);
+	gf_assert(gf_node_get_tag((GF_Node*)event->currentTarget->ptr)==TAG_SVG_font);
 	font = gf_node_get_private((GF_Node*)event->currentTarget->ptr);
 	font->not_loaded = 0;
 
@@ -376,7 +376,7 @@ void compositor_init_svg_glyph(GF_Compositor *compositor, GF_Node *node)
 	GF_SAFEALLOC(st, SVG_GlyphStack);
 	if (!st) return;
 	utf8 = (u8 *) *atts.unicode;
-	len = gf_utf8_mbstowcs(utf_name, 200, (const char **) &utf8);
+	len = gf_utf8_mbstowcs(utf_name, sizeof(utf_name), (const char **) &utf8);
 	if (len == GF_UTF8_FAIL) return;
 	/*this is a single glyph*/
 	if (len==1) {

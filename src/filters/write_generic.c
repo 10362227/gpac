@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2023
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / generic stream to file filter
@@ -33,27 +33,27 @@
 
 #include <gpac/internal/isomedia_dev.h>
 
-enum
-{
+GF_OPT_ENUM (GF_DecoderConfigInsertMode,
 	DECINFO_NO=0,
 	DECINFO_FIRST,
 	DECINFO_SAP,
-	DECINFO_AUTO
-};
+	DECINFO_AUTO,
+);
 
-enum
-{
+GF_OPT_ENUM (GF_VttHeaderInjectionMode,
 	VTTH_SINGLE=0,
 	VTTH_SEG,
 	VTTH_ALL,
-};
+);
 
 typedef struct
 {
 	//opts
 	Bool exporter, frame, split, merge_region;
-	u32 sstart, send, vtth;
-	u32 pfmt, afmt, decinfo;
+	u32 sstart, send;
+	GF_VttHeaderInjectionMode vtth;
+	u32 pfmt, afmt;
+	GF_DecoderConfigInsertMode decinfo;
 	GF_Fraction dur;
 
 	//only one input pid declared
@@ -98,6 +98,9 @@ typedef struct
 
 	Bool unframe_only;
 	Bool vc1_ilaced;
+	Bool ttml_merger;
+	u64 ttml_first_cts;
+	GF_FilterPacket *ttml_first_pck;
 } GF_GenDumpCtx;
 
 
@@ -369,7 +372,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 				//forcing pixel format regardless of extension
 				if (ctx->pfmt) {
 					if (pf != ctx->pfmt) {
-						gf_filter_pid_negociate_property(ctx->ipid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->pfmt));
+						gf_filter_pid_negotiate_property(ctx->ipid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->pfmt));
 						//make sure we reconfigure
 						ctx->codecid = 0;
 						pf = ctx->pfmt;
@@ -377,7 +380,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 				}
 				//use extension to derive pixel format
 				else if (pf != ctx->target_pfmt) {
-					gf_filter_pid_negociate_property(ctx->ipid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->target_pfmt));
+					gf_filter_pid_negotiate_property(ctx->ipid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->target_pfmt));
 					strcpy(szExt, gf_pixel_fmt_sname(ctx->target_pfmt));
 					//make sure we reconfigure
 					ctx->codecid = 0;
@@ -421,7 +424,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 				//forcing sample format regardless of extension
 				if (ctx->afmt) {
 					if (sfmt != ctx->afmt) {
-						gf_filter_pid_negociate_property(ctx->ipid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(ctx->afmt));
+						gf_filter_pid_negotiate_property(ctx->ipid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(ctx->afmt));
 						//make sure we reconfigure
 						ctx->codecid = 0;
 						sfmt = ctx->afmt;
@@ -429,7 +432,7 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 				}
 				//use extension to derive sample format
 				else if (sfmt != ctx->target_afmt) {
-					gf_filter_pid_negociate_property(ctx->ipid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(ctx->target_afmt));
+					gf_filter_pid_negotiate_property(ctx->ipid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(ctx->target_afmt));
 					strcpy(szExt, gf_audio_fmt_sname(ctx->target_afmt));
 					//make sure we reconfigure
 					ctx->codecid = 0;
@@ -490,12 +493,8 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 	//avoid creating a file when dumping individual samples
 	if (ctx->split) {
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_NB_FRAMES);
-		if (!p || (p->value.uint>1))
-			gf_filter_pid_set_property(ctx->opid, GF_PROP_PCK_FILENUM, &PROP_UINT(0) );
-		else
+		if (p && (p->value.uint<=1))
 			ctx->split = GF_FALSE;
-	} else if (ctx->frame) {
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PCK_FILENUM, &PROP_UINT(0) );
 	}
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DURATION);
@@ -505,6 +504,10 @@ GF_Err writegen_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, &PROP_BOOL(GF_TRUE));
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(stype));
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(cid));
+	}
+	if (ctx->ttml_merger) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_NB_FRAMES, NULL);
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
 	}
 
 	gf_filter_pid_set_framing_mode(pid, GF_TRUE);
@@ -1066,7 +1069,6 @@ static GF_Err writegen_push_ttml(GF_GenDumpCtx *ctx, char *data, u32 data_size, 
 				}
 			}
 			gf_list_insert(div_global->content, p_pck, idx);
-
 		}
 	}
 
@@ -1121,9 +1123,23 @@ static GF_Err writegen_flush_ttml(GF_GenDumpCtx *ctx)
 		gf_filter_pck_unref(ctx->ttml_dash_pck);
 		ctx->ttml_dash_pck = NULL;
 	}
-	gf_filter_pck_set_framing(pck, GF_TRUE, GF_TRUE);
 	gf_xml_dom_node_del(ctx->ttml_root);
 	ctx->ttml_root = NULL;
+
+	if (ctx->ttml_first_pck) {
+		gf_filter_pck_merge_properties(ctx->ttml_first_pck, pck);
+		gf_filter_pck_set_sap(pck, GF_FILTER_SAP_1);
+		gf_filter_pck_set_dts(pck, ctx->ttml_first_cts);
+		gf_filter_pck_set_cts(pck, ctx->ttml_first_cts);
+		u64 last_cts = gf_filter_pck_get_cts(ctx->ttml_first_pck);
+		last_cts += gf_filter_pck_get_duration(ctx->ttml_first_pck);
+		gf_filter_pck_set_duration(pck, (u32) (last_cts - ctx->ttml_first_cts));
+
+		gf_filter_pck_unref(ctx->ttml_first_pck);
+		ctx->ttml_first_pck = NULL;
+		ctx->ttml_first_cts = 0;
+	}
+	gf_filter_pck_set_framing(pck, GF_TRUE, GF_TRUE);
 	return gf_filter_pck_send(pck);
 }
 
@@ -1326,7 +1342,7 @@ GF_Err writegen_process(GF_Filter *filter)
 				gf_dynstrcat(&y4m_hdr, szInfo, NULL);
 			}
 			p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_SAR);
-			if (p) {
+			if (p && (p->value.frac.num>0)) {
 				sprintf(szInfo, " A%d:%d", p->value.frac.num, p->value.frac.den);
 				gf_dynstrcat(&y4m_hdr, szInfo, NULL);
 			}
@@ -1379,6 +1395,15 @@ GF_Err writegen_process(GF_Filter *filter)
 	} else if (ctx->ttml_agg) {
 		GF_Err e = writegen_push_ttml(ctx, data, pck_size, pck);
 		ctx->first = GF_FALSE;
+		if (ctx->ttml_merger) {
+			if (!ctx->ttml_first_pck) {
+				ctx->ttml_first_cts = gf_filter_pck_get_cts(pck);
+				ctx->ttml_first_pck = pck;
+				gf_filter_pck_ref_props(&ctx->ttml_first_pck);
+			} else {
+				gf_filter_pck_merge_properties(pck, ctx->ttml_first_pck);
+			}
+		}
 		if (e) {
 			gf_filter_pid_drop_packet(ctx->ipid);
 			return e;
@@ -1411,7 +1436,7 @@ GF_Err writegen_process(GF_Filter *filter)
 					dur *= p->value.uint;
 					dur /= timescale;
 				}
-				assert(pck_size >= bpp * dur);
+				gf_assert(pck_size >= bpp * dur);
 				pck_size = bpp * dur;
 
 				dst_pck = gf_filter_pck_new_alloc(ctx->opid, pck_size, &odata);
@@ -1433,6 +1458,8 @@ GF_Err writegen_process(GF_Filter *filter)
 					gf_filter_pck_forward(pck, ctx->opid);
 					goto no_output;
 				}
+				empty_seg=GF_TRUE;
+			} else if (ctx->webvtt) {
 				empty_seg=GF_TRUE;
 			} else {
 				ctx->sample_num--;
@@ -1951,7 +1978,7 @@ static GF_FilterArgs GenDumpArgs[] =
 	"- first: inserted on first packet\n"
 	"- sap: inserted at each SAP\n"
 	"- auto: selects between no and first based on media type", GF_PROP_UINT, "auto", "no|first|sap|auto", GF_FS_ARG_HINT_ADVANCED},
-	{ OFFS(split), "force one file per decoded frame", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(split), "force one file per frame", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(frame), "force single frame dump with no rewrite. In this mode, all codec types are supported", GF_PROP_BOOL, "false", NULL, 0},
 	{ OFFS(sstart), "start number of frame to forward. If 0, all samples are forwarded", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(send), "end number of frame to forward. If less than start frame, all samples after start are forwarded", GF_PROP_UINT, "0", NULL, 0},
@@ -1982,7 +2009,7 @@ void writegen_finalize(GF_Filter *filter)
 
 GF_FilterRegister GenDumpRegister = {
 	.name = "writegen",
-	GF_FS_SET_DESCRIPTION("Stream to file")
+	GF_FS_SET_DESCRIPTION("Stream to File converter")
 	GF_FS_SET_HELP("Generic single stream to file converter, used when extracting/converting PIDs.\n"
 	"The writegen filter should usually not be explicitly loaded without a source ID specified, since the filter would likely match any PID connection.")
 	.private_size = sizeof(GF_GenDumpCtx),
@@ -1992,7 +2019,8 @@ GF_FilterRegister GenDumpRegister = {
 	SETCAPS(GenDumpCaps),
 	.configure_pid = writegen_configure_pid,
 	.process = writegen_process,
-	.flags = GF_FS_REG_TEMP_INIT
+	.flags = GF_FS_REG_TEMP_INIT,
+	.hint_class_type = GF_FS_CLASS_TOOL
 };
 
 static const GF_FilterCapability FrameDumpCaps[] =
@@ -2050,19 +2078,59 @@ static GF_FilterCapability GenDumpXCaps[] =
 
 const GF_FilterRegister WriteUFRegister = {
 	.name = "writeuf",
-	GF_FS_SET_DESCRIPTION("Stream to unframed format")
+	GF_FS_SET_DESCRIPTION("Framed to Unframed converter")
 	GF_FS_SET_HELP("Generic single stream to unframed format converter, used when converting PIDs. This filter should not be explicitly loaded.\n")
 	.private_size = sizeof(GF_GenDumpCtx),
 	.initialize = writeuf_initialize,
 	.finalize = writegen_finalize,
 	SETCAPS(GenDumpXCaps),
 	.configure_pid = writegen_configure_pid,
-	.process = writegen_process
+	.process = writegen_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 const GF_FilterRegister *writeuf_register(GF_FilterSession *session)
 {
 	return &WriteUFRegister;
 }
+
+
+
+static GF_Err ttmlmerge_initialize(GF_Filter *filter)
+{
+	GF_GenDumpCtx *ctx = gf_filter_get_udta(filter);
+	ctx->unframe_only = GF_TRUE;
+	ctx->ttml_merger = GF_TRUE;
+	ctx->ttml_agg = GF_TRUE;
+	return GF_OK;
+}
+
+/* ttml merger: we reuse writegen logic for TTML merging, but keeping sample timing*/
+static GF_FilterCapability TTMLMergeCaps[] =
+{
+	CAP_UINT(GF_CAPS_INPUT_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_TEXT),
+	CAP_UINT(GF_CAPS_INPUT_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_SUBS_XML),
+	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
+};
+
+
+const GF_FilterRegister TTMLMergeRegister = {
+	.name = "ttmlmerge",
+	GF_FS_SET_DESCRIPTION("TTML sample merger")
+	GF_FS_SET_HELP("Merge input samples into a single TTML sample. Merging restarts at the start of DASH segments.\n")
+//	.flags = GF_FS_REG_EXPLICIT_ONLY,
+	.private_size = sizeof(GF_GenDumpCtx),
+	.initialize = ttmlmerge_initialize,
+	.finalize = writegen_finalize,
+	SETCAPS(TTMLMergeCaps),
+	.configure_pid = writegen_configure_pid,
+	.process = writegen_process,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
+};
+const GF_FilterRegister *ttmlmerge_register(GF_FilterSession *session)
+{
+	return &TTMLMergeRegister;
+}
+
 
 #else
 const GF_FilterRegister *writegen_register(GF_FilterSession *session)
@@ -2070,6 +2138,10 @@ const GF_FilterRegister *writegen_register(GF_FilterSession *session)
 	return NULL;
 }
 const GF_FilterRegister *writeuf_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+const GF_FilterRegister *ttmlmerge_register(GF_FilterSession *session)
 {
 	return NULL;
 }

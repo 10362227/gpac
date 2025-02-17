@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2023
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / video output filter
@@ -69,23 +69,21 @@ static char *default_glsl_vertex = "\
 
 #endif
 
-typedef enum
-{
+GF_OPT_ENUM (GF_VideoOutMode,
 	MODE_GL,
 	MODE_GL_PBO,
 	MODE_2D,
 	MODE_2D_SOFT,
-} GF_VideoOutMode;
+);
 
 
-enum
-{
+GF_OPT_ENUM (GF_VideoFlipMode,
 	FLIP_NO,
 	FLIP_VERT,
 	FLIP_HORIZ,
 	FLIP_BOTH,
 	FLIP_BOTH2,
-};
+);
 
 static u32 nb_vout_inst=0;
 
@@ -97,7 +95,8 @@ typedef struct
 	Bool vsync, linear, fullscreen, drop, hide, step, vjs, async;
 	GF_Fraction64 dur;
 	Double speed, hold;
-	u32 back, vflip, vrot;
+	u32 back, vrot;
+	GF_VideoFlipMode vflip; 
 	GF_PropVec2i wsize, owsize;
 	GF_PropVec2i wpos;
 	Double start;
@@ -181,7 +180,8 @@ typedef struct
 	u64 rebuffer;
 
 	Bool force_reconfig_pid;
-	u32 pid_vflip, pid_vrot;
+	GF_VideoFlipMode pid_vflip;
+	u32 pid_vrot;
 	Bool too_slow;
 } GF_VideoOutCtx;
 
@@ -383,11 +383,11 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 
 
 	if (is_remove) {
-		assert(ctx->pid==pid);
+		gf_assert(ctx->pid==pid);
 		ctx->pid=NULL;
 		return GF_OK;
 	}
-	assert(!ctx->pid || (ctx->pid==pid));
+	gf_assert(!ctx->pid || (ctx->pid==pid));
 	if (pid && !gf_filter_pid_check_caps(pid))
 		return GF_NOT_SUPPORTED;
 
@@ -411,7 +411,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 
 	ctx->sar.num = ctx->sar.den = 1;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-	if (p && p->value.frac.den && p->value.frac.num) {
+	if (p && p->value.frac.den && (p->value.frac.num>0)) {
 		if (ctx->sar.num * p->value.frac.den != p->value.frac.num * ctx->sar.den)
 			sar_changed = GF_TRUE;
 		ctx->sar = p->value.frac;
@@ -456,7 +456,8 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_CLAP_Y);
 	if (p && p->value.frac.den) { ctx->c_y = (Float) p->value.frac.num; ctx->c_y /= p->value.frac.den; }
 
-	if (check_mx) {
+	//decompose matrix unless flip/rot are already set
+	if (check_mx && !ctx->pid_vflip && !ctx->pid_vrot) {
 		GF_Err gf_prop_matrix_decompose(const GF_PropertyValue *p, u32 *flip_mode, u32 *rot_mode);
 
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_ISOM_TRACK_MATRIX);
@@ -815,7 +816,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 			force_pf = GF_PIXEL_RGB;
 		}
 		if (ctx->pfmt != force_pf) {
-			gf_filter_pid_negociate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(force_pf) );
+			gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(force_pf) );
 			return GF_OK;
 		}
 	}
@@ -2366,7 +2367,8 @@ GF_FilterRegister VideoOutRegister = {
 	.configure_pid = vout_configure_pid,
 	.process = vout_process,
 	.process_event = vout_process_event,
-	.update_arg = vout_update_arg
+	.update_arg = vout_update_arg,
+	.hint_class_type = GF_FS_CLASS_MM_IO
 };
 
 const GF_FilterRegister *vout_register(GF_FilterSession *session)

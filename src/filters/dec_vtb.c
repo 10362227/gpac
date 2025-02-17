@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / VideoToolBox decoder filter
@@ -187,7 +187,7 @@ static void vtbdec_on_frame(void *opaque, void *sourceFrameRefCon, OSStatus stat
 	GF_VTBHWFrame *frame;
 	u32 i, count, timescale;
 	u64 cts, dts;
-	assert(ctx->cur_pck);
+	gf_assert(ctx->cur_pck);
 
     if (!image) {
 		if (status != kCVReturnSuccess) {
@@ -228,7 +228,7 @@ static void vtbdec_on_frame(void *opaque, void *sourceFrameRefCon, OSStatus stat
 		memset(frame, 0, sizeof(GF_VTBHWFrame));
 	}
 
-	assert( gf_filter_pck_get_seek_flag(ctx->cur_pck) == 0 );
+	gf_assert( gf_filter_pck_get_seek_flag(ctx->cur_pck) == 0 );
 
 	frame->frame_ifce.user_data = frame;
 	frame->frame = CVPixelBufferRetain(image);
@@ -1210,7 +1210,7 @@ static GF_Err vtbdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 	}
 
 	if (ctx->vtb_session) {
-		assert(ctx->reconfig_needed);
+		gf_assert(ctx->reconfig_needed);
 		return GF_OK;
 	}
 
@@ -1247,11 +1247,12 @@ static void vtbdec_delete_decoder(GF_VTBDecCtx *ctx)
 	ctx->VPSs = NULL;
 }
 
-static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char *inBuffer, u32 inBufferLength, char **out_buffer, u32 *out_size)
+static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char *inBuffer, u32 inBufferLength, u64 dts, char **out_buffer, u32 *out_size)
 {
 	u32 i, sc_size=0;
 	char *ptr = inBuffer;
 	u32 nal_size;
+	u32 nb_nal_size_zero = 0;
 	GF_Err e = GF_OK;
 	Bool reassign_bs = GF_TRUE;
 	Bool check_reconfig = GF_FALSE;
@@ -1265,7 +1266,10 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 		nal_size = gf_media_nalu_next_start_code((u8 *) inBuffer, inBufferLength, &sc_size);
 		if (!sc_size) return GF_NON_COMPLIANT_BITSTREAM;
 		ptr += nal_size + sc_size;
-		assert(inBufferLength >= nal_size + sc_size);
+		if (inBufferLength < nal_size + sc_size) {
+			gf_assert(0);
+			return GF_NON_COMPLIANT_BITSTREAM;
+		}
 		inBufferLength -= nal_size + sc_size;
 	}
 	
@@ -1274,13 +1278,17 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 		u8 nal_type, nal_hdr;
 
 		if (ctx->nalu_size_length) {
+			if (inBufferLength<ctx->nalu_size_length) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL in sample DTS "LLU": sizeLength %u but %u bytes only in payload\n", dts, ctx->nalu_size_length, inBufferLength));
+				break;
+			}
 			nal_size = 0;
 			for (i=0; i<ctx->nalu_size_length; i++) {
 				nal_size = (nal_size<<8) + ((u8) ptr[i]);
 			}
 
 			if (nal_size > inBufferLength) {
-				GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL: size indicated %u but %u bytes only in payload\n", nal_size, inBufferLength));
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL in sample DTS "LLU": size indicated %u but %u bytes only in payload\n", dts, nal_size, inBufferLength));
 				break;
 			}
 			ptr += ctx->nalu_size_length;
@@ -1289,7 +1297,10 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
 		}
 
         if (nal_size==0) {
-            GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL: size 0 shall never happen\n", nal_size));
+			//two consecutive nalsize 0 abirts
+			if (nb_nal_size_zero) break;
+			nb_nal_size_zero++;
+            GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[VTB] Error parsing NAL in sample DTS "LLU": size 0 shall never happen\n", dts));
 
             if (ctx->nalu_size_length) {
                 if (inBufferLength < ctx->nalu_size_length) break;
@@ -1300,8 +1311,9 @@ static GF_Err vtbdec_parse_nal_units(GF_Filter *filter, GF_VTBDecCtx *ctx, char 
                 ptr += sc_size;
             }
             continue;
-        }
-        
+		}
+		nb_nal_size_zero = 0;
+
 		if (ctx->is_avc) {
 			if (!ctx->nal_bs) ctx->nal_bs = gf_bs_new(ptr, nal_size, GF_BITSTREAM_READ);
 			else gf_bs_reassign_buffer(ctx->nal_bs, ptr, nal_size);
@@ -1572,9 +1584,9 @@ static GF_Err vtbdec_process(GF_Filter *filter)
 		gf_filter_pid_set_eos(ctx->opid);
 		return GF_EOS;
 	}
-	assert(ref_pid);
+	gf_assert(ref_pid);
 	pck = gf_filter_pid_get_packet(ref_pid);
-	assert(pck);
+	gf_assert(pck);
 
 	if (ctx->drop_non_refs && !gf_filter_pck_get_sap(pck)) {
 		gf_filter_pid_drop_packet(ref_pid);
@@ -1654,7 +1666,7 @@ static GF_Err vtbdec_process(GF_Filter *filter)
 	//Always parse AVC data , remove SPS/PPS/... and reconfig if needed
 	if (ctx->is_annex_b || ctx->nalu_size_length) {
 
-		e = vtbdec_parse_nal_units(filter, ctx, in_buffer, in_buffer_size, &in_data, &in_data_size);
+		e = vtbdec_parse_nal_units(filter, ctx, in_buffer, in_buffer_size, gf_filter_pck_get_dts(pck) , &in_data, &in_data_size);
 		if (e) {
 			gf_filter_pid_drop_packet(ref_pid);
 			return e;
@@ -1787,7 +1799,7 @@ GF_Err vtbframe_get_plane(GF_FilterFrameInterface *frame, u32 plane_idx, const u
 	GF_VTBHWFrame *f = (GF_VTBHWFrame *)frame->user_data;
 	if (! outPlane || !outStride) return GF_BAD_PARAM;
 	*outPlane = NULL;
-	assert(f->frame);
+	gf_assert(f->frame);
 	if (!f->locked) {
 		status = CVPixelBufferLockBaseAddress(f->frame, kCVPixelBufferLock_ReadOnly);
 		if (status != kCVReturnSuccess) {
@@ -2089,6 +2101,7 @@ GF_FilterRegister GF_VTBDecCtxRegister = {
 	.configure_pid = vtbdec_configure_pid,
 	.process = vtbdec_process,
 	.process_event = vtbdec_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #else

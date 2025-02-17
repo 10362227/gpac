@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022-2023
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / compressed split bitstream aggregator filter
@@ -745,15 +745,16 @@ static GF_Err nalu_process(BSAggCtx *ctx, BSAggOut *pctx, u32 codec_type)
 	for (u32 j=0; j<nal_count; j++) {
 		NALStore *ns = gf_list_get(pctx->nal_stores, j);
 		if (!ns->size) continue;
-		LHVCLayerInfo *linf = &pctx->linf[ns->lid];
+		if (ns->lid<64) {
+			LHVCLayerInfo *linf = &pctx->linf[ns->lid];
 
-		linf->layer_id_plus_one = ns->lid + 1;
-		if (!linf->min_temporal_id || (linf->min_temporal_id > ns->tid))
-			linf->min_temporal_id = ns->tid;
+			linf->layer_id_plus_one = ns->lid + 1;
+			if (!linf->min_temporal_id || (linf->min_temporal_id > ns->tid))
+				linf->min_temporal_id = ns->tid;
 
-		if (linf->max_temporal_id < ns->tid)
-			linf->max_temporal_id = ns->tid;
-
+			if (linf->max_temporal_id < ns->tid)
+				linf->max_temporal_id = ns->tid;
+		}
 		memcpy(output, ns->data, ns->size);
 		output+= ns->size;
 		ns->size = 0;
@@ -960,7 +961,7 @@ static const GF_FilterCapability BSAggCaps[] =
 
 GF_FilterRegister BSAggRegister = {
 	.name = "bsagg",
-	GF_FS_SET_DESCRIPTION("Compressed layered bitstream aggregator")
+	GF_FS_SET_DESCRIPTION("Layered bitstream aggregator")
 	GF_FS_SET_HELP("This filter aggregates layers and sublayers into a single output PID.\n"
 	"\n"
 	"The filter supports AVC|H264, HEVC and VVC stream reconstruction, and is passthrough for other codec types.\n"
@@ -980,7 +981,8 @@ GF_FilterRegister BSAggRegister = {
 	.initialize = bs_agg_initialize,
 	.finalize = bs_agg_finalize,
 	.configure_pid = bs_agg_configure_pid,
-	.process = bs_agg_process
+	.process = bs_agg_process,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 const GF_FilterRegister *bsagg_register(GF_FilterSession *session)

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2023
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *
  *  This file is part of GPAC / MPEG2-TS sub-project
  *
@@ -111,6 +111,10 @@ const char *gf_m2ts_get_stream_name(GF_M2TSStreamType streamType)
 		return "Metadata (PES)";
 	case GF_M2TS_METADATA_ID3_HLS:
 		return "ID3/HLS Metadata (PES)";
+	case GF_M2TS_METADATA_ID3_KLVA:
+		return "ID3/KLV Metadata (PES)";
+	case GF_M2TS_SCTE35_SPLICE_INFO_SECTIONS:
+		return "SCTE35 splice_info_section (Section)";
 
 	default:
 		return "Unknown";
@@ -153,86 +157,17 @@ static u32 gf_m2ts_reframe_reset(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, Bool sam
 	return 0;
 }
 
-
-static void add_text(char **buffer, u32 *size, u32 *pos, char *msg, u32 msg_len)
+static u32 gf_m2ts_reframe_add_prop(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, Bool same_pts, unsigned char *data, u32 data_len, GF_M2TS_PESHeader *pes_hdr)
 {
-	if (!msg || !buffer) return;
-
-	if (*pos+msg_len>*size) {
-		*size = *pos+msg_len-*size+256;
-		*buffer = (char *)gf_realloc(*buffer, *size);
-	}
-	if (! *buffer)
-		return;
-
-	memcpy((*buffer)+(*pos), msg, msg_len);
-	(*buffer)[*pos+msg_len] = 0;
-	*pos += msg_len;
-}
-
-static GF_Err id3_parse_tag(char *data, u32 length, char **output, u32 *output_size, u32 *output_pos)
-{
-	GF_BitStream *bs;
-	u32 pos, size;
-
-	if ((data[0] != 'I') || (data[1] != 'D') || (data[2] != '3'))
-		return GF_NOT_SUPPORTED;
-
-	bs = gf_bs_new(data, length, GF_BITSTREAM_READ);
-
-	gf_bs_skip_bytes(bs, 3);
-	/*u8 major = */gf_bs_read_u8(bs);
-	/*u8 minor = */gf_bs_read_u8(bs);
-	/*u8 unsync = */gf_bs_read_int(bs, 1);
-	/*u8 ext_hdr = */ gf_bs_read_int(bs, 1);
-	gf_bs_read_int(bs, 6);
-	/*size = */gf_id3_read_size(bs);
-
-	pos = (u32) gf_bs_get_position(bs);
-	size = length-pos;
-
-	while (size && (gf_bs_available(bs)>=10) ) {
-		u32 ftag = gf_bs_read_u32(bs);
-		u32 fsize = gf_id3_read_size(bs);
-		/*u16 fflags = */gf_bs_read_u16(bs);
-		size -= 10;
-
-		//TODO, handle more ID3 tags ?
-		if (ftag==GF_ID3V2_FRAME_TXXX) {
-			u32 tpos = (u32) gf_bs_get_position(bs);
-			char *text = data+tpos;
-			add_text(output, output_size, output_pos, text, fsize);
-		} else {
-			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[MPEG-2 TS] ID3 tag not handled, patch welcome\n", gf_4cc_to_str(ftag) ) );
-		}
-		gf_bs_skip_bytes(bs, fsize);
-	}
-	gf_bs_del(bs);
-	return GF_OK;
-}
-
-static u32 gf_m2ts_reframe_id3_pes(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, Bool same_pts, unsigned char *data, u32 data_len, GF_M2TS_PESHeader *pes_hdr)
-{
-	char frame_header[256];
-	char *output_text = NULL;
-	u32 output_len = 0;
-	u32 pos = 0;
 	GF_M2TS_PES_PCK pck;
 	pck.flags = 0;
-	if (pes->rap) pck.flags |= GF_M2TS_PES_PCK_RAP;
-	if (!same_pts) pck.flags |= GF_M2TS_PES_PCK_AU_START;
 	pck.DTS = pes->DTS;
 	pck.PTS = pes->PTS;
-	sprintf(frame_header, LLU" --> NEXT\n", pes->PTS);
-	add_text(&output_text, &output_len, &pos, frame_header, (u32)strlen(frame_header));
-	id3_parse_tag((char *)data, data_len, &output_text, &output_len, &pos);
-	add_text(&output_text, &output_len, &pos, "\n\n", 2);
-	pck.data = (char *)output_text;
-	pck.data_len = pos;
+	pck.data = (char *)data;
+	pck.data_len = data_len;
 	pck.stream = pes;
-	ts->on_event(ts, GF_M2TS_EVT_PES_PCK, &pck);
-	gf_free(output_text);
-	/*we consumed all data*/
+	pck.stream->stream_type = pes->stream_type;
+	ts->on_event(ts, GF_M2TS_EVT_ID3/*should depend on pes->streamtype*/, &pck);
 	return 0;
 }
 
@@ -362,9 +297,15 @@ static void gf_m2ts_es_del(GF_M2TS_ES *es, GF_M2TS_Demuxer *ts)
 		if (pes->temi_tc_desc) gf_free(pes->temi_tc_desc);
 
 		if (pes->metadata_descriptor) gf_m2ts_metadata_descriptor_del(pes->metadata_descriptor);
+		if (pes->gpac_meta_dsi) gf_free(pes->gpac_meta_dsi);
 
 	}
 	if (es->slcfg) gf_free(es->slcfg);
+	for (u32 i=0; i<GF_M2TS_MAX_STREAMS; i++) {
+		if (ts->ess[i]==es) {
+			ts->ess[i] = NULL;
+		}
+	}
 	gf_free(es);
 }
 
@@ -432,6 +373,13 @@ static void gf_m2ts_section_complete(GF_M2TS_Demuxer *ts, GF_M2TS_SectionFilter 
 			ts->on_mpe_event(ts, GF_M2TS_EVT_DVB_MPE, &pck);
 		}
 #endif
+		else if ((ts->on_event && (sec->section[0]==GF_M2TS_TABLE_ID_SCTE35_SPLICE_INFO)) ) {
+			GF_M2TS_SL_PCK pck;
+			pck.data_len = sec->length;
+			pck.data = sec->section;
+			pck.stream = (GF_M2TS_ES *)ses;
+			ts->on_event(ts, GF_M2TS_EVT_SCTE35_SPLICE_INFO, &pck);
+		}
 		else if (ts->on_event) {
 			GF_M2TS_SL_PCK pck;
 			pck.data_len = sec->length;
@@ -554,7 +502,7 @@ static void gf_m2ts_section_complete(GF_M2TS_Demuxer *ts, GF_M2TS_SectionFilter 
 			section_start = 3;
 		}
 		/*process section*/
-		if (section_valid) {
+		if (section_valid && sec->length > section_start) {
 			GF_M2TS_Section *section;
 
 			GF_SAFEALLOC(section, GF_M2TS_Section);
@@ -709,7 +657,7 @@ static void gf_m2ts_gather_section(GF_M2TS_Demuxer *ts, GF_M2TS_SectionFilter *s
 			sec->section = (char*)gf_realloc(sec->section, sizeof(char)*sec->length);
 		}
 
-		if (sec->length && sec->received + ptr_field >= sec->length) {
+		if (sec->length && (sec->received < sec->length) && (data_size >= (u32) (1 + sec->length - sec->received))) {
 			u32 len = sec->length - sec->received;
 			memcpy(sec->section + sec->received, data+1, sizeof(char)*len);
 			sec->received += len;
@@ -807,7 +755,7 @@ static void gf_m2ts_process_sdt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *ses, GF
 
 	//orig_net_id = (data[0] << 8) | data[1];
 	pos = 3;
-	while (pos < data_size) {
+	while (pos+4 < data_size) {
 		GF_M2TS_SDT *sdt;
 		u32 descs_size, d_pos, ulen;
 
@@ -832,7 +780,7 @@ static void gf_m2ts_process_sdt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *ses, GF
 		}
 
 		d_pos = 0;
-		while (d_pos < descs_size) {
+		while (d_pos+1 < descs_size) {
 			u8 d_tag = data[pos+d_pos];
 			u8 d_len = data[pos+d_pos+1];
 
@@ -973,7 +921,7 @@ See annex C of DVB-SI ETSI EN 300468 */
 	time_table->hour   = 10*((data[2]&0xf0)>>4) + (data[2]&0x0f);
 	time_table->minute = 10*((data[3]&0xf0)>>4) + (data[3]&0x0f);
 	time_table->second = 10*((data[4]&0xf0)>>4) + (data[4]&0x0f);
-	assert(time_table->hour<24 && time_table->minute<60 && time_table->second<60);
+	gf_assert(time_table->hour<24 && time_table->minute<60 && time_table->second<60);
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("[MPEG-2 TS] Stream UTC time is %u/%02u/%02u %02u:%02u:%02u\n", time_table->year, time_table->month, time_table->day, time_table->hour, time_table->minute, time_table->second));
 
 	switch (table_id) {
@@ -1036,7 +984,7 @@ See annex C of DVB-SI ETSI EN 300468 */
 	if (ts->on_event) ts->on_event(ts, GF_M2TS_EVT_TOT, time_table);
 	break;
 	default:
-		assert(0);
+		gf_assert(0);
 		goto error_exit;
 	}
 
@@ -1085,7 +1033,7 @@ static GF_M2TS_MetadataPointerDescriptor *gf_m2ts_read_metadata_pointer_descript
 		d->ts_id = gf_bs_read_u16(bs);
 		size += 4;
 	}
-	if (length-size > 0) {
+	if (length > size) {
 		d->data_size = length-size;
 		d->data = (char *)gf_malloc(d->data_size);
 		gf_bs_read_data(bs, d->data, d->data_size);
@@ -1209,7 +1157,7 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 		len = (u32) data[5];
 		while (info_length > first_loop_len) {
 			if (tag == GF_M2TS_MPEG4_IOD_DESCRIPTOR) {
-				if ((len>2) && (len - 2 <= info_length)) {
+				if ((len>2) && (len - 2 <= info_length) && (data_size>8) && (data_size-8 > (u32)len-2)) {
 					u32 size;
 					GF_BitStream *iod_bs;
 					iod_bs = gf_bs_new((char *)data+8, len-2, GF_BITSTREAM_READ);
@@ -1257,6 +1205,9 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 					/* don't know what to do with it for now, delete */
 					gf_m2ts_metadata_pointer_descriptor_del(metapd);
 				}
+			} else if(tag == GF_M2TS_REGISTRATION_DESCRIPTOR && len >= 4 && data_size>9) {
+				u32 reg_desc_format = GF_4CC(data[6], data[7], data[8], data[9]);
+				GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("[MPEG-2 TS] Registration descriptor with format_identifier \"%s\"\n", gf_4cc_to_str(reg_desc_format)));
 			} else {
 				GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("[MPEG-2 TS] Skipping descriptor (0x%x) and others not supported\n", tag));
 			}
@@ -1446,6 +1397,7 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 		case GF_M2TS_PRIVATE_SECTION:
 		case GF_M2TS_QUALITY_SEC:
 		case GF_M2TS_MORE_SEC:
+		case GF_M2TS_SCTE35_SPLICE_INFO_SECTIONS:
 			GF_SAFEALLOC(ses, GF_M2TS_SECTION_ES);
 			if (!ses) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MPEG2TS] Failed to allocate ES for pid %d\n", pid));
@@ -1461,6 +1413,8 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 				GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("Quality metadata sections on pid %d\n", pid));
 			} else if (stream_type == GF_M2TS_MORE_SEC) {
 				GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("MORE sections on pid %d\n", pid));
+			} else if (stream_type == GF_M2TS_SCTE35_SPLICE_INFO_SECTIONS) {
+				GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("SCTE35 Splice Info sections on pid %d\n", pid));
 			} else {
 				GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("stream type DSM CC user private sections on pid %d \n", pid));
 			}
@@ -1528,12 +1482,12 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 						/* cf https://smpte-ra.org/registered-mpeg-ts-ids */
 						switch (reg_desc_format) {
 						case GF_M2TS_RA_STREAM_AC3:
-							//don't overwrite if alread EAC3 or TrueHD
+							//don't overwrite if already EAC3 or TrueHD
 							if ((es->stream_type != GF_M2TS_AUDIO_EC3) && (es->stream_type != GF_M2TS_AUDIO_TRUEHD))
 								es->stream_type = GF_M2TS_AUDIO_AC3;
 							break;
 						case GF_M2TS_RA_STREAM_EAC3:
-							//don't overwrite if alread AC3 or TrueHD
+							//don't overwrite if already AC3 or TrueHD
 							if ((es->stream_type != GF_M2TS_AUDIO_AC3) && (es->stream_type != GF_M2TS_AUDIO_TRUEHD))
 								es->stream_type = GF_M2TS_AUDIO_EC3;
 							break;
@@ -1555,6 +1509,9 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 							break;
 						case GF_M2TS_RA_STREAM_AV1:
 							es->stream_type = GF_M2TS_VIDEO_AV1;
+							break;
+						case GF_M2TS_RA_STREAM_SCTE35:
+							es->stream_type = GF_M2TS_SCTE35_SPLICE_INFO_SECTIONS;
 							break;
 
 						case GF_M2TS_RA_STREAM_GPAC:
@@ -1640,19 +1597,33 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 					gf_bs_del(metadatad_bs);
 					if (metad->application_format_identifier == GF_M2TS_META_ID3 &&
 					        metad->format_identifier == GF_M2TS_META_ID3) {
-						/*HLS ID3 Metadata */
+						/*HLS ID3 Metadata*/
 						if (pes) {
 							if (pes->metadata_descriptor)
 								gf_m2ts_metadata_descriptor_del(pes->metadata_descriptor);
 							pes->metadata_descriptor = metad;
 							pes->stream_type = GF_M2TS_METADATA_ID3_HLS;
 						}
+						else {
+							gf_m2ts_metadata_descriptor_del(metad);
+						}
+					} else if (metad->format_identifier == GF_M2TS_META_KLVA) {
+						/*ID3 with KLVA generic encoding (https://en.wikipedia.org/wiki/KLV)*/
+						if (pes) {
+							if (pes->metadata_descriptor)
+								gf_m2ts_metadata_descriptor_del(pes->metadata_descriptor);
+							pes->metadata_descriptor = metad;
+							pes->stream_type = GF_M2TS_METADATA_ID3_KLVA;
+						}
+						else {
+							gf_m2ts_metadata_descriptor_del(metad);
+						}
 					} else {
 						/* don't know what to do with it for now, delete */
 						gf_m2ts_metadata_descriptor_del(metad);
 					}
 				}
-				break;
+					break;
 				case GF_M2TS_HEVC_VIDEO_DESCRIPTOR:
 					if (es) es->stream_type = GF_M2TS_VIDEO_HEVC;
 					break;
@@ -1726,7 +1697,7 @@ static void gf_m2ts_process_pmt(GF_M2TS_Demuxer *ts, GF_M2TS_SECTION_ES *pmt, GF
 				        && (o_es->mpeg4_es_id == es->mpeg4_es_id)
 				        && ((o_es->flags & GF_M2TS_ES_IS_SECTION) || ((GF_M2TS_PES *)o_es)->lang == ((GF_M2TS_PES *)es)->lang)
 				   ) {
-					gf_free(es);
+					gf_m2ts_es_del(es, ts);
 					es = NULL;
 				} else {
 					gf_m2ts_es_del(o_es, ts);
@@ -2062,7 +2033,7 @@ static void gf_m2ts_store_temi(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes)
 	}
 	gf_bs_del(bs);
 	pes->temi_tc_desc_len = 0;
-	pes->temi_pending = 1;
+	pes->temi_pending = GF_TRUE;
 }
 
 void gf_m2ts_flush_pes(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, u32 force_flush_type)
@@ -2200,20 +2171,21 @@ void gf_m2ts_flush_pes(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, u32 force_flush_ty
 				}
 			}
 
-			if (!pes->temi_pending && pes->temi_tc_desc_len) {
+			if (pes->temi_tc_desc_len && !pes->temi_pending) {
 				gf_m2ts_store_temi(ts, pes);
 			}
 
 			if (pes->temi_pending) {
-				pes->temi_pending = 0;
+				pes->temi_pending = GF_FALSE;
 				pes->temi_tc.pes_pts = pes->PTS;
 				pes->temi_tc.pid = pes->pid;
 				if (ts->on_event)
 					ts->on_event(ts, GF_M2TS_EVT_TEMI_TIMECODE, &pes->temi_tc);
 			}
 
-			if (! ts->seek_mode)
+			if (!ts->seek_mode && pes->pck_data_len > offset) {
 				remain = pes->reframe(ts, pes, same_pts, pes->pck_data+offset, pes->pck_data_len-offset, &pesh);
+			}
 
 			//CLEANUP alloc stuff
 			if (pes->prev_data) gf_free(pes->prev_data);
@@ -2221,8 +2193,8 @@ void gf_m2ts_flush_pes(GF_M2TS_Demuxer *ts, GF_M2TS_PES *pes, u32 force_flush_ty
 			pes->prev_data_len = 0;
 			if (remain) {
 				pes->prev_data = gf_malloc(sizeof(char)*remain);
-				assert(pes->pck_data_len >= remain);
-				memcpy(pes->prev_data, pes->pck_data + pes->pck_data_len - remain, remain);
+				if (pes->pck_data_len >= remain)
+					memcpy(pes->prev_data, pes->pck_data + pes->pck_data_len - remain, remain);
 				pes->prev_data_len = remain;
 			}
 		}
@@ -2461,18 +2433,24 @@ static void gf_m2ts_get_adaptation_field(GF_M2TS_Demuxer *ts, GF_M2TS_Adaptation
 						char *_url = URL;
 						u8 scheme = gf_bs_read_int(bs, 8);
 						u8 url_len = gf_bs_read_int(bs, 8);
+						if (url_len + 4 > desc_len) {
+							GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[MPEG-2 TS] PID %d: Invalid AF Location descriptor (size=%u) found (scheme=%u, url_len=%u))\n", pid, desc_len, scheme, url_len));
+							break;
+						}
+						u8 scheme_len = 0;
 						switch (scheme) {
 						case 1:
 							strcpy(URL, "http://");
-							_url = URL+7;
+							scheme_len = 7;
 							break;
 						case 2:
 							strcpy(URL, "https://");
-							_url = URL+8;
+							scheme_len = 8;
 							break;
 						}
+						_url = URL + scheme_len;
 						gf_bs_read_data(bs, _url, url_len);
-						_url[url_len >= GF_ARRAY_LENGTH(URL) ? GF_ARRAY_LENGTH(URL)-1 : url_len] = 0;
+						_url[MIN(url_len, GF_ARRAY_LENGTH(URL)-1-scheme_len)] = 0;
 					}
 					temi_loc.external_URL = URL;
 
@@ -2556,16 +2534,13 @@ static GF_Err gf_m2ts_process_packet(GF_M2TS_Demuxer *ts, unsigned char *data)
 	case 3:
 		af_size = data[4];
 		if (af_size>183) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MPEG-2 TS] TS Packet %d AF field larger than 183 !\n", ts->pck_number));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[MPEG-2 TS] TS Packet %d AF field larger than 183  for AF type 3!\n", ts->pck_number));
 			//error
 			return GF_CORRUPTED_DATA;
 		}
+		if (ts->raw_mode==GF_M2TS_RAW_PROBE) return GF_OK;
 		paf = &af;
 		memset(paf, 0, sizeof(GF_M2TS_AdaptationField));
-		//this will stop you when processing invalid (yet existing) mpeg2ts streams in debug
-		assert( af_size<=183);
-		if (af_size>183)
-			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[MPEG-2 TS] TS Packet %d Detected wrong adaption field size %u when control value is 3\n", ts->pck_number, af_size));
 		if (af_size) gf_m2ts_get_adaptation_field(ts, paf, data+5, af_size, hdr.pid);
 		pos += 1+af_size;
 		payload_size = 183 - af_size;
@@ -2577,6 +2552,7 @@ static GF_Err gf_m2ts_process_packet(GF_M2TS_Demuxer *ts, unsigned char *data)
 			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[MPEG-2 TS] TS Packet %d AF size is %d when it must be 183 for AF type 2\n", ts->pck_number, af_size));
 			return GF_CORRUPTED_DATA;
 		}
+		if (ts->raw_mode==GF_M2TS_RAW_PROBE) return GF_OK;
 		paf = &af;
 		memset(paf, 0, sizeof(GF_M2TS_AdaptationField));
 		gf_m2ts_get_adaptation_field(ts, paf, data+5, af_size, hdr.pid);
@@ -2589,19 +2565,29 @@ static GF_Err gf_m2ts_process_packet(GF_M2TS_Demuxer *ts, unsigned char *data)
 	case 0:
 		return GF_OK;
 	default:
+		if (ts->raw_mode==GF_M2TS_RAW_PROBE) return GF_OK;
 		break;
 	}
 	data += pos;
 
 	/*PAT*/
 	if (hdr.pid == GF_M2TS_PID_PAT) {
+		if (ts->raw_mode==GF_M2TS_RAW_FORWARD) {
+			GF_M2TS_TSPCK tspck;
+			memset(&tspck, 0, sizeof(GF_M2TS_TSPCK));
+			tspck.data = data - pos;
+			ts->on_event(ts, GF_M2TS_EVT_PCK, &tspck);
+			return GF_OK;
+		}
 		gf_m2ts_gather_section(ts, ts->pat, NULL, &hdr, data, payload_size);
 		return GF_OK;
 	}
 
 	es = ts->ess[hdr.pid];
 	//we work in split mode
-	if (ts->split_mode) {
+	if (ts->raw_mode) {
+		if (ts->raw_mode==GF_M2TS_RAW_PROBE) return GF_OK;
+
 		GF_M2TS_TSPCK tspck;
 		//process PMT table
 		if (es && (es->flags & GF_M2TS_ES_IS_PMT)) {
@@ -2609,9 +2595,13 @@ static GF_Err gf_m2ts_process_packet(GF_M2TS_Demuxer *ts, unsigned char *data)
 			if (ses->sec) gf_m2ts_gather_section(ts, ses->sec, ses, &hdr, data, payload_size);
 		}
 		//and forward every packet other than PAT
+		memset(&tspck, 0, sizeof(GF_M2TS_TSPCK));
 		tspck.stream = es;
 		tspck.pid = hdr.pid;
 		tspck.data = data - pos;
+		if (paf && paf->PCR_flag) {
+			tspck.pcr_plus_one = paf->PCR_base * 300 + paf->PCR_ext;
+		}
 		ts->on_event(ts, GF_M2TS_EVT_PCK, &tspck);
 		return GF_OK;
 	}
@@ -2788,7 +2778,7 @@ GF_Err gf_m2ts_process_data(GF_M2TS_Demuxer *ts, u8 *data, u32 data_size)
 			e |= gf_m2ts_process_packet(ts, (unsigned char *)ts->buffer);
 			data += copy_size;
 			data_size = data_size - copy_size;
-			assert((s32)data_size >= 0);
+			gf_assert((s32)data_size >= 0);
 		}
 		//not sync, copy over the complete buffer
 		else {
@@ -2826,7 +2816,7 @@ GF_Err gf_m2ts_process_data(GF_M2TS_Demuxer *ts, u8 *data, u32 data_size)
 			if (!ts->buffer_size) {
 				return e;
 			}
-			assert(ts->buffer_size<pck_size);
+			gf_assert(ts->buffer_size<pck_size);
 
 			if (is_align) {
 				u32 s = ts->buffer_size;
@@ -3065,10 +3055,12 @@ GF_Err gf_m2ts_set_pes_framing(GF_M2TS_PES *pes, GF_M2TSPesFraming mode)
 		case GF_M2TS_PRIVATE_DATA:
 			/* TODO: handle DVB subtitle streams */
 			break;
+
 		case GF_M2TS_METADATA_ID3_HLS:
-			//TODO
-			pes->reframe = gf_m2ts_reframe_id3_pes;
+		case GF_M2TS_METADATA_ID3_KLVA:
+			pes->reframe = gf_m2ts_reframe_add_prop;
 			break;
+
 		default:
 			pes->reframe = gf_m2ts_reframe_default;
 			break;
@@ -3216,7 +3208,8 @@ void gf_m2ts_print_info(GF_M2TS_Demuxer *ts)
 }
 #endif
 
-#define M2TS_PROBE_SIZE	188000
+//20 packets max
+#define M2TS_PROBE_SIZE	188*20
 static Bool gf_m2ts_probe_buffer(char *buf, u32 size)
 {
 	GF_Err e;
@@ -3227,6 +3220,7 @@ static Bool gf_m2ts_probe_buffer(char *buf, u32 size)
 	gf_log_set_tool_level(GF_LOG_CONTAINER, GF_LOG_QUIET);
 
 	ts = gf_m2ts_demux_new();
+	ts->raw_mode = GF_M2TS_RAW_PROBE;
 	e = gf_m2ts_process_data(ts, buf, size);
 
 	if (!ts->pck_number) {
@@ -3297,7 +3291,7 @@ static void rewrite_pts_dts(unsigned char *ptr, u64 TS)
 	ptr[4] &= 0x1;
 	ptr[4] |= (unsigned char)((TS&0x00000007fULL)<<1);
 
-	assert(((u64)(ptr[0]&0xe)<<29) + ((u64)ptr[1]<<22) + ((u64)(ptr[2]&0xfe)<<14) + ((u64)ptr[3]<<7) + ((ptr[4]&0xfe)>>1) == TS);
+	gf_assert(((u64)(ptr[0]&0xe)<<29) + ((u64)ptr[1]<<22) + ((u64)(ptr[2]&0xfe)<<14) + ((u64)ptr[3]<<7) + ((ptr[4]&0xfe)>>1) == TS);
 }
 
 #define ADJUST_TIMESTAMP(_TS) \

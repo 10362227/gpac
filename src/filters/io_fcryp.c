@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2021-2023
+ *			Copyright (c) Telecom ParisTech 2021-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / file crypt/decrypt for full segment encryption filter
@@ -244,9 +244,14 @@ static GF_Err cryptfin_process(GF_Filter *filter)
 			//use a threaded session
 			if (!ctx->key_sess) {
 				GF_DownloadManager *dm = gf_filter_get_download_manager(filter);
+				if (!dm) {
+					ctx->in_error = GF_NOT_SUPPORTED;
+					ctx->reload_key_state = KEY_STATE_NONE;
+					return ctx->in_error;
+				}
 				ctx->key_sess = gf_dm_sess_new(dm, ctx->key_url, GF_NETIO_SESSION_NOT_CACHED, cryptfin_net_io, ctx, &e);
 			} else {
-				e = gf_dm_sess_setup_from_url(ctx->key_sess, ctx->key_url, GF_TRUE);
+				e = gf_dm_sess_setup_from_url(ctx->key_sess, ctx->key_url, GF_FALSE);
 			}
 			if (e) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Failed to setup download session for key %s: %s\n", ctx->key_url, gf_error_to_string(e)))
@@ -374,7 +379,8 @@ GF_FilterRegister CryptFinRegister = {
 	.finalize = cryptfile_finalize,
 	.configure_pid = cryptfile_configure_pid,
 	.process = cryptfin_process,
-	.probe_url = cryptfile_probe_url
+	.probe_url = cryptfile_probe_url,
+	.hint_class_type = GF_FS_CLASS_CRYPTO
 };
 
 
@@ -650,7 +656,8 @@ GF_FilterRegister CryptFoutRegister = {
 	.finalize = cryptfile_finalize,
 	.configure_pid = cryptfile_configure_pid,
 	.process = cryptfout_process,
-	.probe_url = cryptfile_probe_url
+	.probe_url = cryptfile_probe_url,
+	.hint_class_type = GF_FS_CLASS_CRYPTO
 };
 
 

@@ -264,6 +264,7 @@
     <ClCompile Include="..\..\src\filters\dec_odf.c" />
     <ClCompile Include="..\..\src\filters\dec_openhevc.c" />
     <ClCompile Include="..\..\src\filters\dec_opensvc.c" />
+    <ClCompile Include="..\..\src\filters\dec_scte35.c" />
     <ClCompile Include="..\..\src\filters\dec_theora.c" />
     <ClCompile Include="..\..\src\filters\dec_ttml.c" />
     <ClCompile Include="..\..\src\filters\dec_ttxt.c" />
@@ -300,6 +301,7 @@
     <ClCompile Include="..\..\src\filters\hevcsplit.c" />
     <ClCompile Include="..\..\src\filters\inspect.c" />
     <ClCompile Include="..\..\src\filters\in_route.c" />
+    <ClCompile Include="..\..\src\filters\in_route_repair.c" />
     <ClCompile Include="..\..\src\filters\in_dvb4linux.c" />
     <ClCompile Include="..\..\src\filters\in_file.c" />
     <ClCompile Include="..\..\src\filters\in_http.c" />
@@ -372,6 +374,9 @@
     <ClCompile Include="..\..\src\filters\write_qcp.c" />
     <ClCompile Include="..\..\src\filters\write_tx3g.c" />
     <ClCompile Include="..\..\src\filters\write_vtt.c" />
+    <ClCompile Include="..\..\src\filters\dec_webcodec.c" />
+    <ClCompile Include="..\..\src\filters\enc_webcodec.c" />
+    <ClCompile Include="..\..\src\filters\avin_web.c" />
     <ClCompile Include="..\..\src\filter_core\filter.c" />
     <ClCompile Include="..\..\src\filter_core\filter_pck.c" />
     <ClCompile Include="..\..\src\filter_core\filter_pid.c" />
@@ -452,6 +457,7 @@
     <ClCompile Include="..\..\src\media_tools\dsmcc.c" />
     <ClCompile Include="..\..\src\media_tools\dvb_mpe.c" />
     <ClCompile Include="..\..\src\media_tools\gpac_ogg.c" />
+    <ClCompile Include="..\..\src\media_tools\id3.c" />
     <ClCompile Include="..\..\src\media_tools\img.c" />
     <ClCompile Include="..\..\src\media_tools\crypt_tools.c" />
     <ClCompile Include="..\..\src\media_tools\isom_hinter.c" />
@@ -585,11 +591,13 @@
     <ClCompile Include="..\..\src\utils\Remotery.c" />
     <ClCompile Include="..\..\src\utils\sha1.c" />
     <ClCompile Include="..\..\src\utils\sha256.c" />
+    <ClCompile Include="..\..\src\utils\md5.c" />
     <ClCompile Include="..\..\src\utils\token.c" />
     <ClCompile Include="..\..\src\utils\unicode.c" />
     <ClCompile Include="..\..\src\utils\uni_bidi.c" />
     <ClCompile Include="..\..\src\utils\url.c" />
     <ClCompile Include="..\..\src\utils\utf.c" />
+    <ClCompile Include="..\..\src\utils\xml_bin_custom.c" />
     <ClCompile Include="..\..\src\utils\xml_parser.c" />
   </ItemGroup>
   <ItemGroup>

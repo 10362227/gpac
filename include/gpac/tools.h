@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -72,6 +72,11 @@ Macro formatting a 4-character code (or 4CC) "abcd" as 0xAABBCCDD
 #ifndef GF_4CC
 #define GF_4CC(a,b,c,d) ((((u32)a)<<24)|(((u32)b)<<16)|(((u32)c)<<8)|((u32)d))
 #endif
+
+/*! Macro formating 4CC from compiler-constant string of 4 characters
+\hideinitializer
+ */
+#define GF_4CC_CSTR(s) GF_4CC(s[0],s[1],s[2],s[3])
 
 /*! minimum buffer size to hold any 4CC in string format*/
 #define GF_4CC_MSIZE	10
@@ -206,7 +211,9 @@ typedef enum
 	/*! filter PID config requires new instance of filter */
 	GF_REQUIRES_NEW_INSTANCE = -56,
 	/*! filter PID config cannot be supported by this filter, no use trying to find an alternate input filter chain*/
-	GF_FILTER_NOT_SUPPORTED = -57
+	GF_FILTER_NOT_SUPPORTED = -57,
+	/*! server does not support range requests: response with status=200 to a request with byte range*/
+	GF_IO_BYTE_RANGE_NOT_SUPPORTED = -58,
 } GF_Err;
 
 /*!
@@ -296,6 +303,16 @@ Search a substring in a string without checking for case
  */
 Bool gf_strnistr(const char *text, const char *subtext, u32 subtext_len);
 
+/*!
+\brief search string in buffer
+
+Search for a substring in a memory buffer of characters that may not be null-terminated
+\param data buffer of chars in which to search
+\param data_size size of data buffer
+\param pat pattern to search for as a null-terminated string
+\return a pointer to the first occurrence of pat in data, or null if not found (may not be null-terminated)
+ */
+const char* gf_strmemstr(const char *data, u32 data_size, const char *pat);
 
 /*!
 \brief safe timestamp rescale
@@ -379,6 +396,59 @@ Compares two timestamps
  */
 Bool gf_timestamp_equal(u64 value1, u64 timescale1, u64 value2, u64 timescale2);
 
+/*!
+\brief strict convert str into integer
+
+Validate and parse str into integer
+\param str text to convert to integer
+\param ans integer to fill
+\return GF_TRUE if str represents an integer without any leading space nor extra chars
+ */
+Bool gf_strict_atoi(const char* str, s32* ans);
+
+/*!
+\brief strict convert str into unsigned integer
+
+Validate and parse str into integer
+\param str text to convert to integer
+\param ans unsigned integer to fill
+\return GF_TRUE if str represents an unsigned integer without any leading space nor extra chars
+*/
+Bool gf_strict_atoui(const char* str, u32* ans);
+
+/*!
+\brief formats a duration
+
+Formats a duration into a string
+\param dur duration expressed in timescale
+\param timescale number of ticks per second in duration
+\param szDur the buffer to format
+\return the formated input buffer
+*/
+const char *gf_format_duration(u64 dur, u32 timescale, char szDur[100]);
+
+/*!
+\brief timecode type
+ */
+typedef struct
+{
+	u8 hours, minutes, seconds;
+	u16 n_frames;
+	Float max_fps;
+	Bool drop_frame;
+	u32 as_timestamp;
+} GF_TimeCode;
+
+/*!
+\brief formats a timecode
+
+Formats a timecode into a string
+\param tc timecode to format
+\param szTimecode the buffer to format
+\return the formated input buffer
+*/
+const char* gf_format_timecode(GF_TimeCode *tc, char szTimecode[100]);
+
 /*! @} */
 
 /*!
@@ -393,9 +463,9 @@ The library can usually be configured from command line if your program uses \re
 
 The library can also be configured from your program using \ref gf_opts_set_key and related functions right after initializing the library.
 
-For more information on configuration options, see \code gpac -hx core \endcode and https://wiki.gpac.io/core_options
+For more information on configuration options, see \code gpac -hx core \endcode and https://wiki.gpac.io/Filters/core_options
 
-For more information on filters configuration options, see https://wiki.gpac.io/Filters
+For more information on filters configuration options, see https://wiki.gpac.io/Filters/Filters
 
 @{
  */
@@ -601,6 +671,12 @@ typedef void (*gf_rmt_user_callback)(void *udta, const char* text);
 GF_Err gf_sys_profiler_set_callback(void *udta, gf_rmt_user_callback rmt_usr_cbk);
 
 
+/*! Sends a log message to remotery web client
+\param msg text message to send. The message format should be json
+\return GF_OK if success, GF_BAD_PARAM if profiler is not running, GF_NOT_SUPPORTED if profiler not supported
+*/
+GF_Err gf_sys_profiler_log(const char *msg);
+
 /*! Sends a message to remotery web client
 \param msg text message to send. The message format should be json
 \return GF_OK if success, GF_BAD_PARAM if profiler is not running, GF_NOT_SUPPORTED if profiler not supported
@@ -778,6 +854,7 @@ typedef enum
 	/*! special value used to set a level for all tools*/
 	GF_LOG_ALL,
 	GF_LOG_TOOL_MAX = GF_LOG_ALL,
+	GF_LOG_TOOL_UNDEFINED
 } GF_LOG_Tool;
 
 /*!
@@ -900,6 +977,15 @@ Checks if logs are stored to file
 */
 Bool gf_log_use_file();
 
+/*!
+\brief Parses a log tool
+
+Parses a log tool by name
+\param logs the name to parse
+\return log tool value
+*/
+u32 gf_log_parse_tool(const char *logs);
+
 #ifdef GPAC_DISABLE_LOG
 void gf_log_check_error(u32 ll, u32 lt);
 #define GF_LOG(_ll, _lm, __args) gf_log_check_error(_ll, _lm);
@@ -919,7 +1005,30 @@ Resets log file if any log file name was specified, by closing and reopening a n
 */
 void gf_log_reset_file();
 
+//! Extra log instructions
+typedef struct log_extra
+{
+	//! number of tools and levels
+	u32 nb_tools;
+	//! additionnal  tools
+	GF_LOG_Tool *tools;
+	//! additionnal  levels for the tools
+	GF_LOG_Level *levels;
+	//! exit if error
+	Bool strict;
+} GF_LogExtra;
 
+/*! Register a new extra log levels
+ \param log extra levels to add - may be NULL but shall be valid until call to \ref gf_log_pop_extra or \ref gf_log_reset_extras or  end of app
+*/
+void gf_log_push_extra(const GF_LogExtra *log);
+/*! Unregister an extra log levels
+ \param log extra levels to add - may be NULL
+*/
+void gf_log_pop_extra(const GF_LogExtra *log);
+/*! Unregister all  extra log levels
+*/
+void gf_log_reset_extras();
 
 /*!	@} */
 
@@ -1043,16 +1152,32 @@ Parses 128 bit from string
 GF_Err gf_bin128_parse(const char *string, bin128 value);
 
 
+/*! blob range status */
+typedef enum
+{
+	/*! blob range is valid */
+	GF_BLOB_RANGE_VALID=0,
+	/*! blob range is not valid, still in transfer */
+	GF_BLOB_RANGE_IN_TRANSFER,
+	/*! blob range is not in transfer and is (partially or completely) lost */
+	GF_BLOB_RANGE_CORRUPTED,
+} GF_BlobRangeStatus;
+
+/*! blob flags*/
 enum
 {
+	/*! blob is in transfer */
     GF_BLOB_IN_TRANSFER = 1,
+	/*! blob is corrupted */
     GF_BLOB_CORRUPTED = 1<<1,
+	/*! blob is parsable (valid mux format) but had partial repair only (media holes) */
+    GF_BLOB_PARTIAL_REPAIR = 1<<2
 };
 
 /*!
  * Blob structure used to pass data pointer around
  */
-typedef struct
+typedef struct __gf_blob
 {
 	/*! data block of blob */
 	u8 *data;
@@ -1066,6 +1191,14 @@ typedef struct
     /*! blob mutex for multi-thread access */
     struct __tag_mutex *mx;
 #endif
+    /*! last blob modification time (write access) in microsec , 0 if unknown*/
+    u64 last_modification_time;
+	/*! function used to query if a range of a blob in transfer is valid. If NULL, any range is invalid until transfer is done
+	when set this function overrides the blob flags for gf_blob_query_range
+	size is updated to the maximum number of consecutive bytes starting from the goven offset */
+	GF_BlobRangeStatus (*range_valid)(struct __gf_blob *blob, u64 start, u32 *size);
+	/*! private data for range_valid function*/
+	void *range_udta;
 } GF_Blob;
 
 /*!
@@ -1079,11 +1212,37 @@ typedef struct
 GF_Err gf_blob_get(const char *blob_url, u8 **out_data, u32 *out_size, u32 *blob_flags);
 
 /*!
+ * Checks if a given byte range is valid in blob
+\param blob  blob object
+\param start_offset start offset of data to check in blob
+\param size size of data to check in blob
+\return blob range status
+ */
+GF_BlobRangeStatus gf_blob_query_range(GF_Blob *blob, u64 start_offset, u32 size);
+
+/*!
  * Releases blob data
 \param blob_url URL of blob object (ie gmem://%p)
 \return error code
  */
 GF_Err gf_blob_release(const char *blob_url);
+
+
+/*!
+ * Retrieves data associated with a blob. If success, \ref gf_blob_release_ex must be called after this
+\param blob the blob object
+\param out_data if success, set to blob data pointer
+\param out_size if success, set to blob data size
+\param blob_flags if success, set to blob flags - may be NULL
+\return error code
+ */
+GF_Err gf_blob_get_ex(GF_Blob *blob, u8 **out_data, u32 *out_size, u32 *blob_flags);
+/*!
+ * Releases blob data
+\param blob the blob object
+\return error code
+ */
+GF_Err gf_blob_release_ex(GF_Blob *blob);
 
 /*!
  * Registers a new blob
@@ -1239,6 +1398,38 @@ Gets ID of the process running this gpac instance.
 \return the ID of the main process
 */
 u32 gf_sys_get_process_id();
+
+
+/*! lockfile status*/
+typedef enum {
+	/*! lockfile creation failed*/
+	GF_LOCKFILE_FAILED=0,
+	/*! lockfile creation succeeded, creating a new lock file*/
+	GF_LOCKFILE_NEW,
+	/*! lockfile creation succeeded,  lock file was already present and created by this process*/
+	GF_LOCKFILE_REUSE
+} GF_LockStatus;
+
+/*!
+\brief Creates a lock file
+
+Creates a lock file for the current process. A lockfile contains a single string giving the creator process ID
+If a lock file exists with a process ID no longer running, the lock file will be granted to the caller.
+Lock files are removed using \ref gf_file_delete
+\param lockfile name of the lockfile
+\return return status
+*/
+GF_LockStatus gf_sys_create_lockfile(const char *lockfile);
+
+/*!
+\brief Checks a process is valid
+
+Checks if a process is running by its ID
+\param process_id process ID
+\return GF_TRUE if process is running, GF_FALSE otherwise
+*/
+Bool gf_sys_check_process_id(u32 process_id);
+
 
 /*!\brief run-time system info object
 
@@ -1519,6 +1710,15 @@ Gets the file size given a FILE object. The FILE object position will be reset t
 u64 gf_fsize(FILE *fp);
 
 /*!
+\brief file size helper for a file descriptor
+
+Gets the file size given a file descriptor.
+\param fd file descriptor to check
+\return file size in bytes
+*/
+u64 gf_fd_fsize(int fd);
+
+/*!
 \brief file IO checker
 
 Checks if the given FILE object is a native FILE or a GF_FileIO wrapper.
@@ -1714,6 +1914,16 @@ Checks if file with given name exists, for regular files or File IO wrapper
 \param par_name  name of the parent file
 \return GF_TRUE if file exists */
 Bool gf_file_exists_ex(const char *file_name, const char *par_name);
+
+/*!
+\brief Open file descriptor
+
+Opens a file descriptor - this is simply a wrapper aroun open taking care of UTF8 for windows
+\param file_name path of the file to check
+\param oflags same parameters as open flags for open
+\param pflags same parameters as permission flags for open
+\return file descriptor, -1 if error*/
+s32 gf_fd_open(const char *file_name, u32 oflags, u32 pflags);
 
 /*! File IO wrapper object*/
 typedef struct __gf_file_io GF_FileIO;
@@ -1977,7 +2187,7 @@ GF_Err gf_gz_compress_payload_ex(u8 **data, u32 data_len, u32 *out_size, u8 data
 Decompresses a data buffer using zlib/inflate.
 \param data data buffer to be decompressed
 \param data_len length of the data buffer to be decompressed
-\param uncompressed_data pointer to the uncompressed data buffer. It is the responsibility of the caller to free this buffer.
+\param uncompressed_data pointer to the uncompressed data buffer. The resulting buffer is NULL-terminated. It is the responsibility of the caller to free this buffer.
 \param out_size size of the uncompressed buffer
 \return error if any
  */
@@ -1987,7 +2197,7 @@ GF_Err gf_gz_decompress_payload(u8 *data, u32 data_len, u8 **uncompressed_data, 
 Decompresses a data buffer using zlib/inflate.
 \param data data buffer to be decompressed
 \param data_len length of the data buffer to be decompressed
-\param uncompressed_data pointer to the uncompressed data buffer. It is the responsibility of the caller to free this buffer.
+\param uncompressed_data pointer to the uncompressed data buffer. The resulting buffer is NULL-terminated. It is the responsibility of the caller to free this buffer.
 \param out_size size of the uncompressed buffer
 \param use_gz if true, gz header is present
 \return error if any
@@ -2123,7 +2333,7 @@ GF_Err gf_sha1_file_ptr(FILE *file, u8 digest[GF_SHA1_DIGEST_SIZE] );
 
 /*! gets SHA-1 of input buffer
 \param buf input buffer to hash
-\param buflen sizeo of input buffer in bytes
+\param buflen size of input buffer in bytes
 \param digest buffer to store message digest
  */
 void gf_sha1_csum(u8 *buf, u32 buflen, u8 digest[GF_SHA1_DIGEST_SIZE]);
@@ -2133,11 +2343,21 @@ void gf_sha1_csum(u8 *buf, u32 buflen, u8 digest[GF_SHA1_DIGEST_SIZE]);
 #define GF_SHA256_DIGEST_SIZE 32
 /*! gets SHA-256 of input buffer
 \param buf input buffer to hash
-\param buflen sizeo of input buffer in bytes
+\param buflen size of input buffer in bytes
 \param digest buffer to store message digest
  */
 void gf_sha256_csum(const void *buf, u64 buflen, u8 digest[GF_SHA256_DIGEST_SIZE]);
 
+
+/*! checksum size for MD5*/
+#define GF_MD5_DIGEST_SIZE	16
+
+/*! gets MD5 of input buffer
+\param buf input buffer to hash
+\param buflen size of input buffer in bytes
+\param digest buffer to store message digest
+ */
+void gf_md5_csum(const void *buf, u32 buflen, u8 digest[GF_MD5_DIGEST_SIZE]);
 
 /*!
 \addtogroup libsys_grp
@@ -2292,7 +2512,7 @@ Bool gf_creds_check_membership(const char *username, const char *users, const ch
 
 /*to call whenever the OpenGL library is opened - this function is needed to bind OpenGL and remotery, and to load
 OpenGL extensions on windows
-not exported, and not included in src/compositor/gl_inc.h since it may be needed even when no OpenGL 
+not exported, and not included in src/compositor/gl_inc.h since it may be needed even when no OpenGL
 calls are made by the caller*/
 void gf_opengl_init();
 
@@ -2357,4 +2577,3 @@ void gf_gl_txw_reset(GF_GLTextureWrapper *tx);
 
 
 #endif		/*_GF_CORE_H_*/
-

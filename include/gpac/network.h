@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -366,8 +366,8 @@ enum
 	GF_SOCK_REUSE_PORT = 1,
 	/*!Forces IPV6 if available.*/
 	GF_SOCK_FORCE_IPV6 = 1<<1,
-	/*!Does not perfom the actual bind, only keeps address and port.*/
-	GF_SOCK_FAKE_BIND = 1<<2
+	/*! Indicates the socket will be used to send , only used in test modes*/
+	GF_SOCK_IS_SENDER = 1<<2
 };
 
 /*!
@@ -408,6 +408,17 @@ Constructs a socket object
 \return the socket object or NULL if network initialization failure
  */
 GF_Socket *gf_sk_new(u32 SocketType);
+
+/*!
+\brief socket constructor
+
+Constructs a socket object with a specific netcap configuration ID
+\param SocketType the socket type to create, either UDP or TCP
+\param netcap_id ID of netcap configuration to use, may be null (see gpac -h netcap)
+\return the socket object or NULL if network initialization failure
+ */
+GF_Socket *gf_sk_new_ex(u32 SocketType, const char *netcap_id);
+
 /*!
 \brief socket destructor
 
@@ -574,6 +585,17 @@ Gets the remote address of a peer. The socket MUST be connected.
 GF_Err gf_sk_get_remote_address(GF_Socket *sock, char *buffer);
 
 /*!
+\brief get remote address
+
+Gets the remote address and port of a peer. The socket MUST be connected.
+\param sock the socket object
+\param buffer destination buffer for IP address. Buffer must be GF_MAX_IP_NAME_LEN long
+\param port set to the remote port, may be NULL
+\return error if any
+ */
+GF_Err gf_sk_get_remote_address_port(GF_Socket *sock, char *buffer, u32 *port);
+
+/*!
 \brief set remote address
 
 Sets the remote address of a socket. This is used by connectionless sockets using SendTo and ReceiveFrom
@@ -594,10 +616,10 @@ Performs multicast setup (BIND and JOIN) for the socket object
 \param multi_port the multicast port number
 \param TTL the multicast TTL (Time-To-Live)
 \param no_bind if sets, only join the multicast
-\param local_interface_ip the local interface IP address if desired. If NULL, the default interface will be used.
+\param ifce_ip_or_name the local interface IP address or name if desired. If NULL, the default interface will be used.
 \return error if any
  */
-GF_Err gf_sk_setup_multicast(GF_Socket *sock, const char *multi_ip_add, u16 multi_port, u32 TTL, Bool no_bind, char *local_interface_ip);
+GF_Err gf_sk_setup_multicast(GF_Socket *sock, const char *multi_ip_add, u16 multi_port, u32 TTL, Bool no_bind, const char *ifce_ip_or_name);
 
 /*!
 \brief source-specific multicast setup
@@ -608,14 +630,14 @@ Performs multicast setup (BIND and JOIN) for the socket object using allowed and
 \param multi_port the multicast port number
 \param TTL the multicast TTL (Time-To-Live)
 \param no_bind if sets, only join the multicast
-\param local_interface_ip the local interface IP address if desired. If NULL, the default interface will be used.
+\param ifce_ip_or_name the local interface IP address or name if desired. If NULL, the default interface will be used.
 \param src_ip_inc IP of sources to receive from
 \param nb_src_ip_inc number of sources to receive from
 \param src_ip_exc IP of sources to exclude
 \param nb_src_ip_exc number of sources to exclude
 \return error if any
  */
-GF_Err gf_sk_setup_multicast_ex(GF_Socket *sock, const char *multi_ip_add, u16 multi_port, u32 TTL, Bool no_bind, char *local_interface_ip, const char **src_ip_inc, u32 nb_src_ip_inc, const char **src_ip_exc, u32 nb_src_ip_exc);
+GF_Err gf_sk_setup_multicast_ex(GF_Socket *sock, const char *multi_ip_add, u16 multi_port, u32 TTL, Bool no_bind, const char *ifce_ip_or_name, const char **src_ip_inc, u32 nb_src_ip_inc, const char **src_ip_exc, u32 nb_src_ip_exc);
 
 /*!
  \brief multicast address test
@@ -659,6 +681,22 @@ Checks if connection has been closed by remote peer
  */
 GF_Err gf_sk_probe(GF_Socket *sock);
 
+/*!
+Bumps lower part of IP address by the given increment eg X.X.X.Y -> X.X.X.Z with Z=Y+increment
+\param in_ip the input IP v4 or v6 address
+\param increment the increment to apply
+\return the newly computed address or NULL if error - must be freed bu user
+ */
+char *gf_net_bump_ip_address(const char *in_ip, u32 increment);
+
+/*!
+Gets IP associated with an interface
+\param ip_or_name the input interface name or IP v4 or v6 address
+\param ipv4 set t o v4 address - can be NULL but shall be freed by user
+\param ipv6 set t o v6 address - can be NULL but shall be freed by user
+\return GF_TRUE if success
+ */
+Bool gf_net_get_adapter_ip(const char *ip_or_name, char **ipv4, char **ipv6);
 
 /*! socket selection mode*/
 typedef enum
@@ -715,7 +753,7 @@ Performs a select (wait) on the socket group
 \param sg socket group object
 \param wait_usec microseconds to wait (must be less than one second)
 \param mode the operation mode desired
-\return error if any
+\return error if any - if using a capture file and the capture is done, returns GF_IP_CONNECTION_CLOSED if TCP sockets are present, otherwise GF_EOS
  */
 GF_Err gf_sk_group_select(GF_SockGroup *sg, u32 wait_usec, GF_SockSelectMode mode);
 

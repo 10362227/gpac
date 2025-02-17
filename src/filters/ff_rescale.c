@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2023
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ffmpeg video rescaler filter
@@ -30,12 +30,11 @@
 #include "ff_common.h"
 #include <gpac/evg.h>
 
-enum
-{
+GF_OPT_ENUM (GF_FFSWScaleAspectRatioMode,
 	FFSWS_KEEPAR_OFF=0,
 	FFSWS_KEEPAR_FULL,
 	FFSWS_KEEPAR_NOSRC,
-};
+);
 
 typedef struct
 {
@@ -49,7 +48,7 @@ typedef struct
 	//internal data
 	Bool initialized;
 	char *padclr;
-	u32 keepar;
+	GF_FFSWScaleAspectRatioMode keepar;
 	GF_Fraction osar;
 
 	GF_FilterPid *ipid, *opid;
@@ -613,7 +612,7 @@ static GF_Err ffsws_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_PIXFMT);
 	if (p) ofmt = p->value.uint;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-	if (p) sar = p->value.frac;
+	if (p && (p->value.frac.num>0)) sar = p->value.frac;
 	else sar.den = sar.num = 1;
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_COLR_RANGE);
@@ -631,35 +630,8 @@ static GF_Err ffsws_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 
 	ctx->passthrough = GF_FALSE;
 
-	Bool downsample_w=GF_FALSE, downsample_h=GF_FALSE;
-	switch (ofmt) {
-	case GF_PIXEL_YUV:
-	case GF_PIXEL_YVU:
-	case GF_PIXEL_YUV_10:
-	case GF_PIXEL_NV12:
-	case GF_PIXEL_NV21:
-	case GF_PIXEL_NV12_10:
-	case GF_PIXEL_NV21_10:
-	case GF_PIXEL_YUVA:
-	case GF_PIXEL_YUVD:
-		downsample_h=GF_TRUE;
-		//fallthrough
-	case GF_PIXEL_YUV422:
-	case GF_PIXEL_YUV422_10:
-	case GF_PIXEL_UYVY:
-	case GF_PIXEL_VYUY:
-	case GF_PIXEL_YUYV:
-	case GF_PIXEL_YVYU:
-	case GF_PIXEL_UYVY_10:
-	case GF_PIXEL_VYUY_10:
-	case GF_PIXEL_YUYV_10:
-	case GF_PIXEL_YVYU_10:
-		downsample_w = GF_TRUE;
-		break;
-
-	default:
-		break;
-	}
+	u32 downsample_w, downsample_h;
+	gf_pixel_get_downsampling(ofmt, &downsample_w, &downsample_h);
 
 	u32 scale_w = w;
 	if ((ctx->keepar == FFSWS_KEEPAR_FULL) && (sar.num > (s32) sar.den)) {
@@ -1047,26 +1019,26 @@ static const GF_FilterCapability FFSWSCaps[] =
 GF_FilterRegister FFSWSRegister = {
 	.name = "ffsws",
 	.version=LIBSWSCALE_IDENT,
-	GF_FS_SET_DESCRIPTION("FFMPEG video rescaler")
-	GF_FS_SET_HELP("This filter rescales raw video data using FFMPEG to the specified size and pixel format.\n"
+	GF_FS_SET_DESCRIPTION("FFmpeg video rescaler")
+	GF_FS_SET_HELP("This filter rescales raw video data using FFmpeg to the specified size and pixel format.\n"
 	"## Output size assignment\n"
 	"If [-osize]() is {0,0}, the output dimensions will be set to the input size, and input aspect ratio will be ignored.\n"
 	"\n"
-	"If [-osize]() is {0,H} (resp. {W,0}), the output width (resp. height) will be set to respect input aspect ratio. If [-keepar=nosrc](), input sample aspect ratio is ignored.\n"
+	"If [-osize]() is {0,H} (resp. {W,0}), the output width (resp. height) will be set to respect input aspect ratio. If [-keepar]() = `nosrc`, input sample aspect ratio is ignored.\n"
 	"## Aspect Ratio and Sample Aspect Ratio\n"
 	"When output sample aspect ratio is set, the output dimensions are divided by the output sample aspect ratio.\n"
 	"EX ffsws:osize=288x240:osar=3/2\n"
 	"The output dimensions will be 192x240.\n"
 	"\n"
-	"When aspect ratio is not kept ([-keepar=off]()):\n"
+	"When aspect ratio is not kept ([-keepar]() = `off`):\n"
 	"- source is resampled to desired dimensions\n"
 	"- if output aspect ratio is not set, output will use source sample aspect ratio\n"
 	"\n"
-	"When aspect ratio is partially kept ([-keepar=nosrc]()):\n"
+	"When aspect ratio is partially kept ([-keepar]() = `nosrc`):\n"
 	"- resampling is done on the input data without taking input sample aspect ratio into account\n"
-	"- if output sample aspect ratio is not set ([-osar=0/N]()), source aspect ratio is forwarded to output.\n"
+	"- if output sample aspect ratio is not set ([-osar]() = `0/N`), source aspect ratio is forwarded to output.\n"
 	"\n"
-	"When aspect ratio is fully kept ([-keepar=full]()), output aspect ratio is force to 1/1 if not set.\n"
+	"When aspect ratio is fully kept ([-keepar]() = `full`), output aspect ratio is force to 1/1 if not set.\n"
 	"\n"
 	"When sample aspect ratio is kept, the filter will:\n"
 	"- center the rescaled input frame on the output frame\n"
@@ -1077,7 +1049,7 @@ GF_FilterRegister FFSWSRegister = {
 	"- for gauss [-p1]() tunes the exponent and thus cutoff frequency\n"
 	"- for lanczos [-p1]() tunes the width of the window function\n"
 	"\n"
-	"See FFMPEG documentation (https://ffmpeg.org/documentation.html) for more details")
+	"See FFmpeg documentation (https://ffmpeg.org/documentation.html) for more details")
 	.private_size = sizeof(GF_FFSWScaleCtx),
 	.args = FFSWSArgs,
 	.configure_pid = ffsws_configure_pid,
@@ -1087,6 +1059,7 @@ GF_FilterRegister FFSWSRegister = {
 	.finalize = ffsws_finalize,
 	.process = ffsws_process,
 	.reconfigure_output = ffsws_reconfigure_output,
+	.hint_class_type = GF_FS_CLASS_AV
 };
 
 #else

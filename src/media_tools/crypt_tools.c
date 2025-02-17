@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Media Tools sub-project
@@ -174,8 +174,12 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 				}
 				else if (!strnicmp(att->value, "ForceClear", 10)) {
 					char *sep = strchr(att->value, '=');
-					if (sep) tkc->sel_enc_range = atoi(sep+1);
 					tkc->sel_enc_type = GF_CRYPT_SELENC_CLEAR_FORCED;
+					if (sep) {
+						tkc->sel_enc_range = atoi(sep+1);
+						//if set to 0, move to no selective encryption
+						if (!tkc->sel_enc_range) tkc->sel_enc_type = GF_CRYPT_SELENC_NONE;
+					}
 				}
 				else if (!stricmp(att->value, "None")) {
 				} else {
@@ -293,6 +297,9 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 			}
 			else if (!stricmp(att->name, "clear_bytes")) {
 				tkc->clear_bytes = atoi(att->value);
+			}
+			else if (!stricmp(att->name, "byte_offset")) {
+				tkc->crypt_byte_offset = atoi(att->value);
 			}
 			else if (!stricmp(att->name, "constant_IV_size")
 				|| (!stricmp(att->name, "IV_size") && (tkc->scheme_type == GF_CRYPT_TYPE_CBCS))
@@ -616,6 +623,8 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return GF_OUT_OF_MEM;
 	}
 
+	//we use implicit mode, don't set any filter ID
+
 	sprintf(an_arg, "mp4dmx:mov=%p", mp4);
 	gf_dynstrcat(&szArgs, an_arg, NULL);
 	if (fragment_name) {
@@ -632,7 +641,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return e;
 	}
 
-	gf_dynstrcat(&szArgs, "cdcrypt:FID=1", NULL);
+	gf_dynstrcat(&szArgs, "cdcrypt", NULL);
 	if (drm_file) {
 		gf_dynstrcat(&szArgs, ":cfile=", NULL);
 		gf_dynstrcat(&szArgs, drm_file, NULL);
@@ -646,7 +655,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return e;
 	}
 
-	gf_dynstrcat(&szArgs, "SID=1", NULL);
+	gf_dynstrcat(&szArgs, "xps_inband=auto", NULL);
 	if (fragment_name) {
 		gf_dynstrcat(&szArgs, ":sseg:noinit:store=frag:refrag:cdur=1000000000", NULL);
 	} else {
@@ -657,8 +666,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 			gf_dynstrcat(&szArgs, ":store=flat", NULL);
 		}
 	}
-	gf_dynstrcat(&szArgs, ":xps_inband=auto", NULL);
-	
+
 	if (gf_isom_has_keep_utc_times(mp4))
 		gf_dynstrcat(&szArgs, ":keep_utc", NULL);
 
@@ -738,7 +746,7 @@ static GF_Err gf_crypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const char
 	char an_arg[100];
 	char *arg_dst=NULL;
 	u32 progress = (u32) -1;
-	GF_Filter *src, *dst, *crypt;
+	GF_Filter *src, *dst, *cryptf;
 	GF_FilterSession *fsess;
 	GF_Err e = GF_OK;
 
@@ -767,12 +775,12 @@ static GF_Err gf_crypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const char
 
 	gf_dynstrcat(&szArgs, "cecrypt:FID=1:cfile=", NULL);
 	gf_dynstrcat(&szArgs, drm_file, NULL);
-	crypt = gf_fs_load_filter(fsess, szArgs, &e);
+	cryptf = gf_fs_load_filter(fsess, szArgs, &e);
 
 	gf_free(szArgs);
 	szArgs = NULL;
 
-	if (!crypt) {
+	if (!cryptf) {
 		gf_fs_del(fsess);
 		GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[Encrypter] Cannot load encryptor: %s\n", gf_error_to_string(e) ));
 		return e;
